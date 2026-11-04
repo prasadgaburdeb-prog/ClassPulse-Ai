@@ -1,0 +1,9 @@
+record_type,id,date,course_id,batch_id,student_id,amount,status,refund_amount
+enquiry,enq-001,2026-10-01,JEE,B1,,0,open,
+enquiry,enq-002,2026-10-02,NEET,B2,,0,open,
+student,adm-001,2026-10-03,JEE,B1,stu-001,0,active,
+obligation,fee-001,2026-10-03,JEE,B1,stu-001,12000,due,
+payment,pay-001,2026-10-04,JEE,B1,stu-001,8000,successful,0
+attendance,att-001,2026-10-05,JEE,B1,stu-001,0,present,
+attendance,att-002,2026-10-06,JEE,B1,stu-001,0,absent,
+exam,exam-001,2026-10-07,JEE,B1,stu-001,82,passed,0
