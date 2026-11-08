@@ -15,6 +15,20 @@ function auth() {
     <section class="panel auth">
       <div class="brand">Class<span>Pulse</span> <span class="ai-badge">AI Powered</span></div>
       <p class="sub">Coaching-centre intelligence & machine learning student pass predictions.</p>
+      
+      <div style="margin: 20px 0 14px;">
+        <button id="instantDemoBtn" style="background: linear-gradient(135deg, #2563eb, #10b981); color: white; width: 100%; padding: 13px 18px; font-size: 14px; font-weight: 700; border-radius: 8px; box-shadow: 0 4px 14px rgba(37, 99, 235, 0.28); border: none; cursor: pointer;">
+          ⚡ 1-Click Instant Demo (Explore Matplotlib Charts & Sample Data)
+        </button>
+        <p class="small" style="text-align: center; margin: 6px 0 0; color: var(--muted);">Loads full student cohort, mock tests, fee data & Matplotlib graphs immediately!</p>
+      </div>
+
+      <div style="display: flex; align-items: center; margin: 18px 0 14px;">
+        <div style="flex: 1; height: 1px; background: var(--line);"></div>
+        <span class="small" style="padding: 0 10px; color: var(--muted);">or sign in to your centre</span>
+        <div style="flex: 1; height: 1px; background: var(--line);"></div>
+      </div>
+
       <div id="message"></div>
       <div class="two">
         <button class="secondary" id="showLogin">Sign in</button>
@@ -25,7 +39,18 @@ function auth() {
   `;
   $('#showLogin').onclick = () => form('login');
   $('#showRegister').onclick = () => form('register');
-  form('register');
+  $('#instantDemoBtn').onclick = async () => {
+    try {
+      $('#instantDemoBtn').textContent = 'Loading demo data & Matplotlib graphs...';
+      let d = await api('/api/v1/auth/demo', { method: 'POST' });
+      user = d.user;
+      dashboard();
+    } catch (e) {
+      alert('Demo login failed: ' + e.message);
+      $('#instantDemoBtn').textContent = '⚡ 1-Click Instant Demo (Explore Matplotlib Charts & Sample Data)';
+    }
+  };
+  form('login');
 }
 
 function form(kind) {
@@ -74,8 +99,17 @@ function dashboard() {
       <button class="secondary" id="logout">Sign out</button>
     </header>
 
+    <!-- Top Sticky Navigation Bar -->
+    <nav class="dashboard-nav">
+      <button class="nav-tab charts-tab" id="navCharts">📈 Matplotlib Charts (Master + 7 Small Graphs)</button>
+      <button class="nav-tab" id="navKPIs">📊 Overview KPIs</button>
+      <button class="nav-tab" id="navAI">🤖 AI Pass Predictor</button>
+      <button class="nav-tab" id="navRecords">📋 Data Records</button>
+      <button class="nav-tab" id="navImport">📁 Import Sheets</button>
+    </nav>
+
     <!-- Global Filters -->
-    <section class="panel">
+    <section class="panel" id="filtersSection">
       <div class="filters">
         <div><label>Start date</label><input id="start" type="date"></div>
         <div><label>End date</label><input id="end" type="date"></div>
@@ -83,6 +117,7 @@ function dashboard() {
         <div><label>Batch ID</label><input id="batch" placeholder="e.g. JEE-A"></div>
         <button id="apply">Apply filters</button>
         <button id="resetFilters" class="secondary">Reset</button>
+        <button id="jumpChartsBtn" style="background: #2563eb; color: white;">📈 Jump to Charts</button>
         <button id="export" class="secondary">Download KPI Report</button>
       </div>
       <p id="filterStatus" class="small"></p>
@@ -91,8 +126,49 @@ function dashboard() {
     <!-- Core KPI Cards -->
     <section class="grid" id="cards"></section>
 
+    <!-- MATPLOTLIB VISUAL ANALYTICS & MASTER INTELLIGENCE GRAPH -->
+    <section class="panel" id="matplotlibSection" style="border-top: 3px solid #2563eb; scroll-margin-top: 70px;">
+      <div class="panel-header">
+        <div>
+          <h2>📈 Matplotlib Visual Analytics & Master Intelligence Graph</h2>
+          <p class="small">High-resolution scientific visualizations generated via Python Matplotlib: individual focused graphs for every metric dimension, plus a unified Master Graph for executive reporting.</p>
+        </div>
+        <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+          <a id="downloadMasterLink" class="button" style="text-decoration: none; display: inline-flex; align-items: center; gap: 6px; font-size: 12px; padding: 8px 14px; background: #1e293b; color: white; border-radius: 6px; font-weight: 600;" href="/api/v1/charts/master" target="_blank" download="classpulse-master-chart.png">&#8595; Download Master Graph (PNG)</a>
+          <button id="refreshChartsBtn" class="secondary" style="font-size: 12px; padding: 8px 14px;">&#8635; Refresh Graphs</button>
+        </div>
+      </div>
+
+      <!-- Master Graph Section -->
+      <div style="margin-bottom: 24px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+          <div>
+            <h3 style="margin: 0; font-size: 15px; color: var(--ink);">Unified Master Graph (All Academic & Financial Details)</h3>
+            <p class="small" style="margin: 2px 0 0;">Multi-panel executive dashboard combining attendance regularity, mock exam performance, fee obligations & collections, admissions funnel, and AI risk distribution into a single figure.</p>
+          </div>
+          <span class="badge badge-success" style="font-size: 11px;">150 DPI High-Res</span>
+        </div>
+        <div id="masterGraphBox" class="graph-master-box">
+          <div style="text-align: center; padding: 30px; color: var(--muted);">&#9680; Generating Master Graph with Matplotlib...</div>
+        </div>
+      </div>
+
+      <!-- Individual Small Graphs for Every Data Dimension -->
+      <div>
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+          <div>
+            <h3 style="margin: 0; font-size: 15px; color: var(--ink);">Individual Data Graphs (One Graph per Data Dimension)</h3>
+            <p class="small" style="margin: 2px 0 0;">Dedicated Matplotlib visualizations for granular analysis of each individual KPI.</p>
+          </div>
+        </div>
+        <div class="small-graphs-grid" id="smallGraphsGrid">
+          <div style="text-align: center; padding: 30px; color: var(--muted); grid-column: 1 / -1;">Rendering individual data graphs...</div>
+        </div>
+      </div>
+    </section>
+
     <!-- MACHINE LEARNING PREDICTION SUITE -->
-    <section class="panel" style="border-top: 3px solid var(--accent);">
+    <section class="panel" id="mlSection" style="border-top: 3px solid var(--accent); scroll-margin-top: 70px;">
       <div class="panel-header">
         <div>
           <h2>AI Student Exam Pass Predictor</h2>
@@ -194,7 +270,7 @@ function dashboard() {
     </section>
 
     <!-- Detailed Raw Data Records -->
-    <section class="panel">
+    <section class="panel" id="recordsSection" style="scroll-margin-top: 70px;">
       <div class="details-head">
         <div>
           <h2>Data Records Browser</h2>
@@ -217,7 +293,7 @@ function dashboard() {
     </section>
 
     <!-- Upload Sheets / CSV / XLSX -->
-    <section class="panel">
+    <section class="panel" id="importSection" style="scroll-margin-top: 70px;">
       <h2>Import Spreadsheet</h2>
       <p class="small">Upload <strong>.csv</strong> or <strong>.xlsx (Excel)</strong> files up to 15 MB. Validates all rows before import. Supports enquiry, student, obligation, payment, attendance, and exam records.</p>
       <input id="file" type="file" accept=".csv, .xlsx">
@@ -247,20 +323,50 @@ function dashboard() {
     auth();
   };
 
-  $('#apply').onclick = () => { load(); loadPredictions(); loadDetails(); };
+  function highlightSection(el) {
+    if (!el) return;
+    el.classList.remove('section-highlight');
+    void el.offsetWidth;
+    el.classList.add('section-highlight');
+  }
+
+  $('#navCharts').onclick = () => {
+    $('#matplotlibSection')?.scrollIntoView({ behavior: 'smooth' });
+    highlightSection($('#matplotlibSection'));
+  };
+  $('#navKPIs').onclick = () => {
+    $('#filtersSection')?.scrollIntoView({ behavior: 'smooth' });
+  };
+  $('#navAI').onclick = () => {
+    $('#mlSection')?.scrollIntoView({ behavior: 'smooth' });
+    highlightSection($('#mlSection'));
+  };
+  $('#navRecords').onclick = () => {
+    $('#recordsSection')?.scrollIntoView({ behavior: 'smooth' });
+  };
+  $('#navImport').onclick = () => {
+    $('#importSection')?.scrollIntoView({ behavior: 'smooth' });
+  };
+  $('#jumpChartsBtn').onclick = () => {
+    $('#matplotlibSection')?.scrollIntoView({ behavior: 'smooth' });
+    highlightSection($('#matplotlibSection'));
+  };
+
+  $('#apply').onclick = () => { load(); loadPredictions(); loadCharts(); loadDetails(); };
   $('#resetFilters').onclick = () => {
     ['start', 'end', 'course', 'batch'].forEach(id => $('#' + id).value = '');
-    load(); loadPredictions(); loadDetails();
+    load(); loadPredictions(); loadCharts(); loadDetails();
   };
   $('#export').onclick = () => window.location = '/api/v1/reports/export?' + params();
   $('#exportPredictions').onclick = () => window.location = '/api/v1/ml/export-predictions?' + params() + (currentRiskFilter !== 'all' ? '&risk_level=' + currentRiskFilter : '');
   $('#directSheetBtn').onclick = analyzeDirectSheet;
+  $('#refreshChartsBtn').onclick = () => loadCharts();
   $('#preview').onclick = upload;
   $('#detailsType').onchange = loadDetails;
   $('#delete').onclick = async () => {
     if (confirm('Delete all imported records for this centre?')) {
       await api('/api/v1/account/data', { method: 'DELETE' });
-      load(); loadPredictions(); loadDetails();
+      load(); loadPredictions(); loadCharts(); loadDetails();
     }
   };
   $('#deleteAccount').onclick = deleteAccount;
@@ -272,6 +378,7 @@ function dashboard() {
 
   load();
   loadPredictions();
+  loadCharts();
   loadDetails();
   runSimulation();
 }
@@ -459,6 +566,111 @@ function renderPredictionsList(preds, s) {
   `;
 }
 
+async function loadCharts() {
+  let masterBox = $('#masterGraphBox');
+  let smallGrid = $('#smallGraphsGrid');
+  if (masterBox) {
+    masterBox.innerHTML = '<div style="text-align: center; padding: 30px; color: var(--muted);">&#9680; Rendering Master Graph via Matplotlib...</div>';
+  }
+  if (smallGrid) {
+    smallGrid.innerHTML = '<div style="text-align: center; padding: 30px; color: var(--muted); grid-column: 1 / -1;">Generating individual Matplotlib charts...</div>';
+  }
+
+  try {
+    let q = params();
+    let d = await api('/api/v1/charts/all?' + q);
+    renderChartsBundle(d, q.toString());
+  } catch (err) {
+    console.error('Failed to load Matplotlib charts:', err);
+    if (masterBox) masterBox.innerHTML = `<p class="notice error">Failed to load graphs: ${err.message}</p>`;
+    if (smallGrid) smallGrid.innerHTML = `<p class="notice error" style="grid-column: 1 / -1;">Failed to load small graphs: ${err.message}</p>`;
+  }
+}
+
+function renderChartsBundle(d, queryStr) {
+  let q = queryStr || '';
+  let masterDownload = $('#downloadMasterLink');
+  if (masterDownload) {
+    if (q && q !== 'custom-sheet') {
+      masterDownload.href = '/api/v1/charts/master?' + q;
+    } else if (d.master_graph) {
+      masterDownload.href = d.master_graph;
+    }
+  }
+
+  let masterBox = $('#masterGraphBox');
+  if (masterBox) {
+    if (d.master_graph) {
+      masterBox.innerHTML = `
+        <div style="position: relative;">
+          <img src="${d.master_graph}" alt="ClassPulse Master Graph" style="width: 100%; height: auto; display: block; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.06);">
+          <div style="position: absolute; top: 12px; right: 12px; display: flex; gap: 8px;">
+            <a href="${d.master_graph}" download="classpulse-master-graph.png" class="badge" style="background: rgba(15, 23, 42, 0.85); color: white; text-decoration: none; padding: 6px 12px; cursor: pointer; font-size: 11px; font-weight: 600; box-shadow: 0 2px 6px rgba(0,0,0,0.2);">
+              &#8595; Save Master PNG
+            </a>
+          </div>
+        </div>
+      `;
+    } else {
+      masterBox.innerHTML = '<p class="small" style="padding: 24px; text-align: center;">No data available to plot master graph.</p>';
+    }
+  }
+
+  let smallGrid = $('#smallGraphsGrid');
+  if (smallGrid && d.small_graphs) {
+    const titles = {
+      attendance: { title: "1. Attendance Breakdown & Rate", desc: "Present, Absent & Excused distribution", badge: "Attendance" },
+      exams: { title: "2. Exam & Mock Score Distribution", desc: "Score spread against 50% pass mark", badge: "Exams" },
+      financials: { title: "3. Fee Obligations & Collections", desc: "Collected fees vs. outstanding balance", badge: "Financials" },
+      conversion: { title: "4. Admissions Conversion Funnel", desc: "Inquiries converted into enrolled students", badge: "Admissions" },
+      risk: { title: "5. AI Student Risk Segmentation", desc: "Safe, Borderline & High Risk student count", badge: "AI Risk" },
+      probability: { title: "6. Pass Probability Spread", desc: "Distribution curve of predicted pass chances", badge: "Predictions" },
+      scatter: { title: "7. Attendance vs. Score Correlation", desc: "Scatter matrix color-coded by AI risk tier", badge: "Correlation" }
+    };
+
+    smallGrid.innerHTML = Object.entries(d.small_graphs).map(([key, dataUri]) => {
+      let meta = titles[key] || { title: key.toUpperCase(), desc: "Matplotlib Data Chart", badge: "Data" };
+      if (!dataUri) {
+        return `
+          <div class="small-graph-card">
+            <div class="small-graph-head">
+              <div>
+                <div class="small-graph-title">${meta.title}</div>
+                <div class="small-graph-desc">${meta.desc}</div>
+              </div>
+              <span class="badge" style="background:#f1f5f9; color:#475569;">${meta.badge}</span>
+            </div>
+            <p class="small" style="padding: 40px 10px; text-align: center; color: var(--muted);">No data available</p>
+          </div>
+        `;
+      }
+      let directUrl = (q && q !== 'custom-sheet') ? `/api/v1/charts/small/${key}?${q}` : dataUri;
+      return `
+        <div class="small-graph-card">
+          <div class="small-graph-head">
+            <div>
+              <div class="small-graph-title">${meta.title}</div>
+              <div class="small-graph-desc">${meta.desc}</div>
+            </div>
+            <span class="badge" style="background:#e0f2fe; color:#0369a1; font-size:10px;">${meta.badge}</span>
+          </div>
+          <div class="small-graph-img-wrap" onclick="window.open('${dataUri}', '_blank')">
+            <img src="${dataUri}" alt="${meta.title}" class="small-graph-img">
+          </div>
+          <div class="small-graph-foot">
+            <a href="${directUrl}" download="classpulse-${key}-chart.png" class="small-graph-btn" style="text-decoration:none;">
+              &#8595; Download PNG
+            </a>
+            <button class="small-graph-btn secondary" onclick="window.open('${dataUri}', '_blank')">
+              Full View
+            </button>
+          </div>
+        </div>
+      `;
+    }).join('');
+  }
+}
+
 async function analyzeDirectSheet() {
   let fileInput = $('#directSheetFile');
   let f = fileInput.files[0];
@@ -482,6 +694,19 @@ async function analyzeDirectSheet() {
     `;
 
     renderPredictionsList(d.predictions, d.summary);
+
+    // Also generate and render Matplotlib graphs for this custom uploaded spreadsheet!
+    try {
+      let fdCharts = new FormData();
+      fdCharts.append('file', f);
+      let cr = await fetch('/api/v1/charts/generate-from-sheet', { method: 'POST', body: fdCharts });
+      if (cr.ok) {
+        let cd = await cr.json();
+        renderChartsBundle(cd, 'custom-sheet');
+      }
+    } catch (chartErr) {
+      console.warn('Could not render sheet charts:', chartErr);
+    }
   } catch (err) {
     $('#directSheetStatus').innerHTML = `<p class="notice error">${err.message}</p>`;
   }
@@ -571,6 +796,7 @@ async function confirmImport() {
     $('#importResult').innerHTML = '<p class="notice">' + r.message + ' ' + r.accepted_rows + ' rows imported.</p>';
     load();
     loadPredictions();
+    loadCharts();
     loadDetails();
   } catch (x) {
     $('#importResult').innerHTML = '<p class="notice error">' + x.message + '</p>';

@@ -257,6 +257,146 @@ tr:hover td { background: #fdfefe; }
   border-radius: 20px;
 }
 
+/* Matplotlib Visualizations Styles */
+.graph-master-box {
+  background: white;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 12px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+}
+.small-graphs-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+}
+.small-graph-card {
+  background: white;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.03);
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+.small-graph-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 14px rgba(0, 0, 0, 0.06);
+}
+.small-graph-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 10px;
+  gap: 8px;
+}
+.small-graph-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--ink);
+}
+.small-graph-desc {
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 2px;
+}
+.small-graph-img-wrap {
+  background: #f8fafc;
+  border-radius: 8px;
+  overflow: hidden;
+  text-align: center;
+  cursor: zoom-in;
+}
+.small-graph-img {
+  width: 100%;
+  height: auto;
+  display: block;
+  transition: opacity 0.2s ease;
+}
+.small-graph-img:hover {
+  opacity: 0.94;
+}
+.small-graph-foot {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+.small-graph-btn {
+  flex: 1;
+  text-align: center;
+  padding: 6px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 6px;
+  background: var(--accent);
+  color: white;
+  border: 0;
+  cursor: pointer;
+}
+.small-graph-btn.secondary {
+  background: #eef3f0;
+  color: var(--ink);
+}
+.small-graph-btn:hover {
+  opacity: 0.92;
+}
+
+/* Dashboard Navigation Bar */
+.dashboard-nav {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 20px;
+  flex-wrap: wrap;
+  background: white;
+  padding: 10px 14px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.03);
+  position: sticky;
+  top: 10px;
+  z-index: 100;
+}
+.nav-tab {
+  padding: 8px 16px;
+  font-size: 13px;
+  font-weight: 600;
+  border-radius: 8px;
+  background: #f1f5f9;
+  color: var(--ink);
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.nav-tab:hover {
+  background: #e2e8f0;
+}
+.nav-tab.charts-tab {
+  background: #eff6ff;
+  color: #1d4ed8;
+  border-color: #bfdbfe;
+  font-weight: 700;
+}
+.nav-tab.charts-tab:hover {
+  background: #dbeafe;
+}
+.section-highlight {
+  animation: pulse-border 1.5s ease;
+}
+@keyframes pulse-border {
+  0% { box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.6); }
+  50% { box-shadow: 0 0 0 8px rgba(59, 130, 246, 0.3); }
+  100% { box-shadow: 0 2px 10px rgba(0, 0, 0, 0.03); }
+}
+
+@media(max-width: 900px) {
+  .small-graphs-grid { grid-template-columns: repeat(2, 1fr); }
+}
+@media(max-width: 600px) {
+  .small-graphs-grid { grid-template-columns: 1fr; }
+}
+
 @media(max-width: 900px) {
   .grid { grid-template-columns: repeat(2, 1fr); }
   .grid-6 { grid-template-columns: repeat(3, 1fr); }

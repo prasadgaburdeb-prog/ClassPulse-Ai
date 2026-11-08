@@ -20,6 +20,12 @@ from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, create_engin
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, relationship, sessionmaker
 
 from app.ml_model import predictor, UniversalSheetAdapter
+from app.charts import (
+    generate_all_charts,
+    generate_master_graph,
+    generate_small_graph,
+    SMALL_GRAPH_DISPATCHER
+)
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -322,6 +328,54 @@ async def login(request: Request, db: Session = Depends(db_session)):
 @app.post("/api/v1/auth/logout")
 def logout(): res=JSONResponse({"ok":True}); res.delete_cookie("classpulse_session"); return res
 
+@app.post("/api/v1/auth/demo")
+async def demo_login(db: Session = Depends(db_session)):
+    """One-click instant demo login that auto-provisions sample data if missing."""
+    demo_email = "demo@classpulse.ai"
+    user = db.scalar(select(User).where(User.email == demo_email))
+    if not user:
+        tenant = db.scalar(select(Tenant).where(Tenant.name == "ClassPulse Demo Academy"))
+        if not tenant:
+            tenant = Tenant(name="ClassPulse Demo Academy")
+            db.add(tenant)
+            db.flush()
+        user = User(tenant_id=tenant.id, email=demo_email, password_hash=password_hash("DemoPass123!"), role="owner")
+        db.add(user)
+        db.flush()
+        
+        sample_path = BASE_DIR / "data" / "synthetic" / "ClassPulse_Student_Exams.csv"
+        if not sample_path.exists():
+            sample_path = BASE_DIR / "data" / "synthetic" / "ClassPulse_Full_Demo.csv"
+        if sample_path.exists():
+            demo_bytes = sample_path.read_bytes()
+            valid, errors, summary = parse_sheet_data(demo_bytes, sample_path.name)
+            job = ImportJob(tenant_id=tenant.id, filename=sample_path.name, status="completed", accepted_rows=len(valid), rejected_rows=0, summary_json=json.dumps(summary))
+            db.add(job)
+            db.flush()
+            for row in valid:
+                db.add(Record(tenant_id=tenant.id, import_id=job.id, record_type=row["record_type"], data_json=json.dumps(row)))
+        db.commit()
+    else:
+        rec_exists = db.scalar(select(Record).where(Record.tenant_id == user.tenant_id))
+        if not rec_exists:
+            sample_path = BASE_DIR / "data" / "synthetic" / "ClassPulse_Student_Exams.csv"
+            if not sample_path.exists():
+                sample_path = BASE_DIR / "data" / "synthetic" / "ClassPulse_Full_Demo.csv"
+            if sample_path.exists():
+                demo_bytes = sample_path.read_bytes()
+                valid, errors, summary = parse_sheet_data(demo_bytes, sample_path.name)
+                job = ImportJob(tenant_id=user.tenant_id, filename=sample_path.name, status="completed", accepted_rows=len(valid), rejected_rows=0, summary_json=json.dumps(summary))
+                db.add(job)
+                db.flush()
+                for row in valid:
+                    db.add(Record(tenant_id=user.tenant_id, import_id=job.id, record_type=row["record_type"], data_json=json.dumps(row)))
+                db.commit()
+
+    tenant = db.get(Tenant, user.tenant_id)
+    audit(db, user.tenant_id, "demo_signed_in")
+    db.commit()
+    return set_session_cookie(JSONResponse({"user": {"email": user.email, "centre_name": tenant.name, "role": user.role}}), user)
+
 @app.get("/api/v1/me")
 def me(user: User=Depends(current_user), db: Session=Depends(db_session)): return {"email":user.email,"centre_name":db.get(Tenant,user.tenant_id).name,"role":user.role}
 
@@ -486,6 +540,94 @@ def export(start: str|None=None,end: str|None=None,course: str|None=None,batch: 
     recs=db.scalars(select(Record).where(Record.tenant_id==user.tenant_id)).all(); data=metrics(filtered(recs,start,end,course,batch)); audit(db,user.tenant_id,"report_exported"); db.commit()
     output=io.StringIO(); writer=csv.writer(output); writer.writerow(["ClassPulse Analytics report"]); writer.writerow(["Period",f"{start or 'All time'} to {end or 'Today'}"]); writer.writerow([]); writer.writerow(["Metric","Value"]); [writer.writerow([key.replace('_',' ').title(),value if value is not None else 'Unavailable']) for key,value in data.items()]
     return Response(output.getvalue(),media_type="text/csv",headers={"Content-Disposition":"attachment; filename=classpulse-report.csv"})
+
+@app.get("/api/v1/charts/all")
+def get_all_charts(start: str|None=None, end: str|None=None, course: str|None=None, batch: str|None=None, user: User=Depends(current_user), db: Session=Depends(db_session)):
+    """
+    Returns base64-encoded Matplotlib charts for both individual data facets
+    and the comprehensive Master Graph.
+    """
+    validate_filters(start, end)
+    tenant = db.get(Tenant, user.tenant_id)
+    centre_name = tenant.name if tenant else "ClassPulse Analytics"
+    tenant_records = db.scalars(select(Record).where(Record.tenant_id == user.tenant_id)).all()
+    current_records = filtered(tenant_records, start, end, course, batch)
+    ml_analysis = predictor.predict_cohort(current_records, course_filter=course, batch_filter=batch)
+
+    charts_data = generate_all_charts(
+        current_records,
+        ml_predictions=ml_analysis,
+        centre_name=centre_name
+    )
+    return charts_data
+
+@app.get("/api/v1/charts/master")
+def get_master_chart_image(start: str|None=None, end: str|None=None, course: str|None=None, batch: str|None=None, user: User=Depends(current_user), db: Session=Depends(db_session)):
+    """
+    Renders and streams the master graph as a standalone PNG image.
+    """
+    validate_filters(start, end)
+    tenant = db.get(Tenant, user.tenant_id)
+    centre_name = tenant.name if tenant else "ClassPulse Analytics"
+    tenant_records = db.scalars(select(Record).where(Record.tenant_id == user.tenant_id)).all()
+    current_records = filtered(tenant_records, start, end, course, batch)
+    ml_analysis = predictor.predict_cohort(current_records, course_filter=course, batch_filter=batch)
+
+    raw_png = generate_master_graph(
+        current_records,
+        ml_predictions=ml_analysis,
+        centre_name=centre_name,
+        as_base64=False
+    )
+    return Response(content=raw_png, media_type="image/png", headers={"Content-Disposition": "inline; filename=classpulse-master-chart.png"})
+
+@app.get("/api/v1/charts/small/{chart_type}")
+def get_small_chart_image(chart_type: str, start: str|None=None, end: str|None=None, course: str|None=None, batch: str|None=None, user: User=Depends(current_user), db: Session=Depends(db_session)):
+    """
+    Renders and streams an individual small graph for a specific data facet as a standalone PNG image.
+    Supported types: attendance, exams, financials, conversion, risk, probability, scatter.
+    """
+    validate_filters(start, end)
+    ctype = chart_type.lower().strip()
+    if ctype not in SMALL_GRAPH_DISPATCHER:
+        raise HTTPException(404, f"Chart type '{chart_type}' not found. Supported: {list(SMALL_GRAPH_DISPATCHER.keys())}")
+
+    tenant_records = db.scalars(select(Record).where(Record.tenant_id == user.tenant_id)).all()
+    current_records = filtered(tenant_records, start, end, course, batch)
+    ml_analysis = predictor.predict_cohort(current_records, course_filter=course, batch_filter=batch)
+
+    raw_png = generate_small_graph(
+        ctype,
+        current_records,
+        ml_predictions=ml_analysis,
+        as_base64=False
+    )
+    return Response(content=raw_png, media_type="image/png", headers={"Content-Disposition": f"inline; filename=classpulse-{ctype}-chart.png"})
+
+@app.post("/api/v1/charts/generate-from-sheet")
+async def generate_charts_from_sheet(file: UploadFile=File(...), user: User=Depends(current_user)):
+    """
+    Instant Matplotlib chart generator for ANY uploaded spreadsheet (.csv or .xlsx).
+    Returns both the Master Graph and all small graphs based on the uploaded file's data.
+    """
+    ext = file.filename.lower().split(".")[-1]
+    if ext not in ("csv", "xlsx"):
+        raise HTTPException(400, "Only .csv and .xlsx spreadsheet files are accepted.")
+
+    data = await file.read()
+    rows, fieldnames = extract_rows_from_bytes(data, file.filename)
+    if not rows:
+        raise HTTPException(400, "Uploaded file contains no rows.")
+
+    ml_result = predictor.predict_from_generic_sheet(rows, filename=file.filename)
+    charts_data = generate_all_charts(
+        rows,
+        ml_predictions=ml_result,
+        centre_name=f"Sheet: {file.filename}"
+    )
+    charts_data["filename"] = file.filename
+    charts_data["detected_columns"] = ml_result.get("detected_columns", {})
+    return charts_data
 
 @app.delete("/api/v1/account/data")
 def delete_data(user: User=Depends(current_user),db: Session=Depends(db_session)):

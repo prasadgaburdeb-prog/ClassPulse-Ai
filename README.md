@@ -66,6 +66,36 @@ Spreadsheets may include multiple record types in one sheet.
 
 ---
 
+## Matplotlib Visualization Engine & Graphs
+
+The platform integrates a server-side Python **Matplotlib visualization suite** (`app/charts.py`) providing:
+
+1. **Individual Small Graphs (One for every data facet):**
+   - **`attendance`**: Donut chart of Present vs Absent vs Excused counts + overall attendance rate.
+   - **`exams`**: Score distribution histogram with 50% pass mark and cohort mean score lines.
+   - **`financials`**: Incurred obligations vs collections vs outstanding dues with recovery rate %.
+   - **`conversion`**: Inquiries to enrolled admissions funnel.
+   - **`risk`**: AI student risk distribution across High Risk (<50%), Borderline (50-75%), and Safe (>75%).
+   - **`probability`**: Pass probability distribution curve and cohort expectation.
+   - **`scatter`**: Pairwise scatter plot of Attendance Rate vs Mock Exam Score color-coded by AI risk tier.
+
+2. **Master Graph (One master graph for every detail):**
+   - An executive 17x11-inch 150-DPI multi-panel visual dashboard combining all 6 academic, behavioral, financial, and AI predictive dimensions with top summary KPI badges and annotations.
+
+### Matplotlib API Endpoints:
+- `GET /api/v1/charts/all`: Returns all small graphs + master graph as base64 data URIs in a single JSON payload.
+- `GET /api/v1/charts/master`: Streams the high-res Master Graph as a standalone PNG image.
+- `GET /api/v1/charts/small/{chart_type}`: Streams a specific small graph as a PNG image (`attendance`, `exams`, `financials`, `conversion`, `risk`, `probability`, `scatter`).
+- `POST /api/v1/charts/generate-from-sheet`: Generates all graphs on-the-fly for any uploaded CSV or XLSX file.
+
+### CLI Graph Generator:
+Generate all PNG charts directly from the terminal into `outputs/charts/`:
+```bash
+python -m app.charts
+```
+
+---
+
 ## Quickstart
 
 1. **Install Dependencies**:
