@@ -1,5 +1,5 @@
 const $ = s => document.querySelector(s), app = $('#app');
-let user = null, preview = null, currentRiskFilter = 'all';
+let user = null, preview = null, currentRiskFilter = 'all', chartsGenerated = false;
 
 const money = n => n == null ? 'Unavailable' : new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(n);
 
@@ -15,19 +15,6 @@ function auth() {
     <section class="panel auth">
       <div class="brand">Class<span>Pulse</span> <span class="ai-badge">AI Powered</span></div>
       <p class="sub">Coaching-centre intelligence & machine learning student pass predictions.</p>
-      
-      <div style="margin: 20px 0 14px;">
-        <button id="instantDemoBtn" style="background: linear-gradient(135deg, #2563eb, #10b981); color: white; width: 100%; padding: 13px 18px; font-size: 14px; font-weight: 700; border-radius: 8px; box-shadow: 0 4px 14px rgba(37, 99, 235, 0.28); border: none; cursor: pointer;">
-          ⚡ 1-Click Instant Demo (Explore Matplotlib Charts & Sample Data)
-        </button>
-        <p class="small" style="text-align: center; margin: 6px 0 0; color: var(--muted);">Loads full student cohort, mock tests, fee data & Matplotlib graphs immediately!</p>
-      </div>
-
-      <div style="display: flex; align-items: center; margin: 18px 0 14px;">
-        <div style="flex: 1; height: 1px; background: var(--line);"></div>
-        <span class="small" style="padding: 0 10px; color: var(--muted);">or sign in to your centre</span>
-        <div style="flex: 1; height: 1px; background: var(--line);"></div>
-      </div>
 
       <div id="message"></div>
       <div class="two">
@@ -39,17 +26,6 @@ function auth() {
   `;
   $('#showLogin').onclick = () => form('login');
   $('#showRegister').onclick = () => form('register');
-  $('#instantDemoBtn').onclick = async () => {
-    try {
-      $('#instantDemoBtn').textContent = 'Loading demo data & Matplotlib graphs...';
-      let d = await api('/api/v1/auth/demo', { method: 'POST' });
-      user = d.user;
-      dashboard();
-    } catch (e) {
-      alert('Demo login failed: ' + e.message);
-      $('#instantDemoBtn').textContent = '⚡ 1-Click Instant Demo (Explore Matplotlib Charts & Sample Data)';
-    }
-  };
   form('login');
 }
 
@@ -90,6 +66,7 @@ function form(kind) {
 }
 
 function dashboard() {
+  chartsGenerated = false;
   app.innerHTML = `
     <header>
       <div>
@@ -134,35 +111,50 @@ function dashboard() {
           <p class="small">High-resolution scientific visualizations generated via Python Matplotlib: individual focused graphs for every metric dimension, plus a unified Master Graph for executive reporting.</p>
         </div>
         <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
-          <a id="downloadMasterLink" class="button" style="text-decoration: none; display: inline-flex; align-items: center; gap: 6px; font-size: 12px; padding: 8px 14px; background: #1e293b; color: white; border-radius: 6px; font-weight: 600;" href="/api/v1/charts/master" target="_blank" download="classpulse-master-chart.png">&#8595; Download Master Graph (PNG)</a>
-          <button id="refreshChartsBtn" class="secondary" style="font-size: 12px; padding: 8px 14px;">&#8635; Refresh Graphs</button>
+          <a id="downloadMasterLink" class="button" style="display: none; text-decoration: none; align-items: center; gap: 6px; font-size: 12px; padding: 8px 14px; background: #1e293b; color: white; border-radius: 6px; font-weight: 600;" href="/api/v1/charts/master" target="_blank" download="classpulse-master-chart.png">&#8595; Download Master Graph (PNG)</a>
+          <button id="generateChartsBtn" class="button" style="font-size: 13px; font-weight: 700; padding: 8px 16px; background: #2563eb; color: white; border: none; border-radius: 6px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px;">📈 Generate Graphs</button>
         </div>
       </div>
 
-      <!-- Master Graph Section -->
-      <div style="margin-bottom: 24px;">
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
-          <div>
-            <h3 style="margin: 0; font-size: 15px; color: var(--ink);">Unified Master Graph (All Academic & Financial Details)</h3>
-            <p class="small" style="margin: 2px 0 0;">Multi-panel executive dashboard combining attendance regularity, mock exam performance, fee obligations & collections, admissions funnel, and AI risk distribution into a single figure.</p>
-          </div>
-          <span class="badge badge-success" style="font-size: 11px;">150 DPI High-Res</span>
-        </div>
-        <div id="masterGraphBox" class="graph-master-box">
-          <div style="text-align: center; padding: 30px; color: var(--muted);">&#9680; Generating Master Graph with Matplotlib...</div>
-        </div>
+      <!-- Compact placeholder shown before generating graphs to avoid taking blank space -->
+      <div id="chartsPlaceholder" style="text-align: center; padding: 32px 20px; background: #f8fafc; border: 1px dashed var(--line); border-radius: 8px; margin-top: 14px;">
+        <div style="font-size: 28px; margin-bottom: 6px;">📊</div>
+        <div style="font-weight: 700; font-size: 14px; color: var(--ink); margin-bottom: 4px;">Matplotlib Visualizations on Demand</div>
+        <p class="small" style="margin: 0 0 16px; color: var(--muted); max-width: 520px; margin-left: auto; margin-right: auto;">
+          Generate the 6-panel executive Master Graph and 7 individual metric graphs (Attendance, Exams, Fees, Admissions, Risk, Pass Probability, and Correlation) for your filtered cohort.
+        </p>
+        <button id="generateChartsBtnPrompt" style="background: #2563eb; color: white; font-weight: 700; padding: 10px 24px; font-size: 14px; border-radius: 6px; border: none; cursor: pointer; box-shadow: 0 2px 8px rgba(37,99,235,0.25);">
+          📈 Generate Graphs
+        </button>
       </div>
 
-      <!-- Individual Small Graphs for Every Data Dimension -->
-      <div>
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
-          <div>
-            <h3 style="margin: 0; font-size: 15px; color: var(--ink);">Individual Data Graphs (One Graph per Data Dimension)</h3>
-            <p class="small" style="margin: 2px 0 0;">Dedicated Matplotlib visualizations for granular analysis of each individual KPI.</p>
+      <!-- Full Charts Content (Master + 7 Small Graphs) - Hidden until user clicks Generate Graphs -->
+      <div id="chartsContent" style="display: none; margin-top: 20px;">
+        <!-- Master Graph Section -->
+        <div style="margin-bottom: 24px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+            <div>
+              <h3 style="margin: 0; font-size: 15px; color: var(--ink);">Unified Master Graph (All Academic & Financial Details)</h3>
+              <p class="small" style="margin: 2px 0 0;">Multi-panel executive dashboard combining attendance regularity, mock exam performance, fee obligations & collections, admissions funnel, and AI risk distribution into a single figure.</p>
+            </div>
+            <span class="badge badge-success" style="font-size: 11px;">150 DPI High-Res</span>
+          </div>
+          <div id="masterGraphBox" class="graph-master-box">
+            <div style="text-align: center; padding: 30px; color: var(--muted);">&#9680; Generating Master Graph with Matplotlib...</div>
           </div>
         </div>
-        <div class="small-graphs-grid" id="smallGraphsGrid">
-          <div style="text-align: center; padding: 30px; color: var(--muted); grid-column: 1 / -1;">Rendering individual data graphs...</div>
+
+        <!-- Individual Small Graphs for Every Data Dimension -->
+        <div>
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+            <div>
+              <h3 style="margin: 0; font-size: 15px; color: var(--ink);">Individual Data Graphs (One Graph per Data Dimension)</h3>
+              <p class="small" style="margin: 2px 0 0;">Dedicated Matplotlib visualizations for granular analysis of each individual KPI.</p>
+            </div>
+          </div>
+          <div class="small-graphs-grid" id="smallGraphsGrid">
+            <div style="text-align: center; padding: 30px; color: var(--muted); grid-column: 1 / -1;">Rendering individual data graphs...</div>
+          </div>
         </div>
       </div>
     </section>
@@ -352,21 +344,23 @@ function dashboard() {
     highlightSection($('#matplotlibSection'));
   };
 
-  $('#apply').onclick = () => { load(); loadPredictions(); loadCharts(); loadDetails(); };
+  $('#apply').onclick = () => { load(); loadPredictions(); if (chartsGenerated) loadCharts(); loadDetails(); };
   $('#resetFilters').onclick = () => {
     ['start', 'end', 'course', 'batch'].forEach(id => $('#' + id).value = '');
-    load(); loadPredictions(); loadCharts(); loadDetails();
+    load(); loadPredictions(); if (chartsGenerated) loadCharts(); loadDetails();
   };
   $('#export').onclick = () => window.location = '/api/v1/reports/export?' + params();
   $('#exportPredictions').onclick = () => window.location = '/api/v1/ml/export-predictions?' + params() + (currentRiskFilter !== 'all' ? '&risk_level=' + currentRiskFilter : '');
   $('#directSheetBtn').onclick = analyzeDirectSheet;
-  $('#refreshChartsBtn').onclick = () => loadCharts();
+  const onGenerateGraphsClick = () => loadCharts();
+  if ($('#generateChartsBtn')) $('#generateChartsBtn').onclick = onGenerateGraphsClick;
+  if ($('#generateChartsBtnPrompt')) $('#generateChartsBtnPrompt').onclick = onGenerateGraphsClick;
   $('#preview').onclick = upload;
   $('#detailsType').onchange = loadDetails;
   $('#delete').onclick = async () => {
     if (confirm('Delete all imported records for this centre?')) {
       await api('/api/v1/account/data', { method: 'DELETE' });
-      load(); loadPredictions(); loadCharts(); loadDetails();
+      load(); loadPredictions(); if (chartsGenerated) loadCharts(); loadDetails();
     }
   };
   $('#deleteAccount').onclick = deleteAccount;
@@ -378,7 +372,6 @@ function dashboard() {
 
   load();
   loadPredictions();
-  loadCharts();
   loadDetails();
   runSimulation();
 }
@@ -567,6 +560,20 @@ function renderPredictionsList(preds, s) {
 }
 
 async function loadCharts() {
+  chartsGenerated = true;
+  let placeholder = $('#chartsPlaceholder');
+  if (placeholder) placeholder.style.display = 'none';
+  let content = $('#chartsContent');
+  if (content) content.style.display = 'block';
+  let downloadLink = $('#downloadMasterLink');
+  if (downloadLink) downloadLink.style.display = 'inline-flex';
+
+  let genBtn = $('#generateChartsBtn');
+  if (genBtn) {
+    genBtn.disabled = true;
+    genBtn.innerHTML = '&#9680; Generating Graphs...';
+  }
+
   let masterBox = $('#masterGraphBox');
   let smallGrid = $('#smallGraphsGrid');
   if (masterBox) {
@@ -584,10 +591,23 @@ async function loadCharts() {
     console.error('Failed to load Matplotlib charts:', err);
     if (masterBox) masterBox.innerHTML = `<p class="notice error">Failed to load graphs: ${err.message}</p>`;
     if (smallGrid) smallGrid.innerHTML = `<p class="notice error" style="grid-column: 1 / -1;">Failed to load small graphs: ${err.message}</p>`;
+  } finally {
+    if (genBtn) {
+      genBtn.disabled = false;
+      genBtn.innerHTML = '&#8635; Regenerate Graphs';
+    }
   }
 }
 
 function renderChartsBundle(d, queryStr) {
+  chartsGenerated = true;
+  let placeholder = $('#chartsPlaceholder');
+  if (placeholder) placeholder.style.display = 'none';
+  let content = $('#chartsContent');
+  if (content) content.style.display = 'block';
+  let downloadLink = $('#downloadMasterLink');
+  if (downloadLink) downloadLink.style.display = 'inline-flex';
+
   let q = queryStr || '';
   let masterDownload = $('#downloadMasterLink');
   if (masterDownload) {
@@ -796,7 +816,7 @@ async function confirmImport() {
     $('#importResult').innerHTML = '<p class="notice">' + r.message + ' ' + r.accepted_rows + ' rows imported.</p>';
     load();
     loadPredictions();
-    loadCharts();
+    if (chartsGenerated) loadCharts();
     loadDetails();
   } catch (x) {
     $('#importResult').innerHTML = '<p class="notice error">' + x.message + '</p>';
