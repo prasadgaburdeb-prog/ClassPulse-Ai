@@ -89,6 +89,16 @@ Base.metadata.create_all(engine)
 app = FastAPI(title="ClassPulse Analytics & Universal AI Exam Predictor", version="1.2.0")
 if ALLOWED_ORIGINS:
     app.add_middleware(CORSMiddleware, allow_origins=ALLOWED_ORIGINS, allow_credentials=True, allow_methods=["GET", "POST", "DELETE"], allow_headers=["Content-Type"])
+
+@app.middleware("http")
+async def add_no_cache_headers(request: Request, call_next):
+    response = await call_next(request)
+    if request.url.path == "/" or request.url.path.startswith("/static"):
+        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+    return response
+
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 previews: dict[str, dict[str, Any]] = {}
 
@@ -306,7 +316,11 @@ def metrics(rows: list[dict]):
     }
 
 @app.get("/")
-def home(): return FileResponse(BASE_DIR / "static" / "index.html")
+def home():
+    return FileResponse(
+        BASE_DIR / "static" / "index.html",
+        headers={"Cache-Control": "no-cache, no-store, must-revalidate", "Pragma": "no-cache", "Expires": "0"}
+    )
 
 @app.get("/health")
 def health(): return {"status":"ok", "ml_model_loaded": predictor.is_trained, "universal_sheet_support": True}

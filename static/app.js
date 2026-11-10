@@ -360,7 +360,8 @@ function dashboard() {
   $('#delete').onclick = async () => {
     if (confirm('Delete all imported records for this centre?')) {
       await api('/api/v1/account/data', { method: 'DELETE' });
-      load(); loadPredictions(); if (chartsGenerated) loadCharts(); loadDetails();
+      resetChartsView();
+      load(); loadPredictions(); loadDetails();
     }
   };
   $('#deleteAccount').onclick = deleteAccount;
@@ -557,6 +558,25 @@ function renderPredictionsList(preds, s) {
       </tbody>
     </table>
   `;
+}
+
+function resetChartsView() {
+  chartsGenerated = false;
+  let placeholder = $('#chartsPlaceholder');
+  if (placeholder) placeholder.style.display = 'block';
+  let content = $('#chartsContent');
+  if (content) content.style.display = 'none';
+  let downloadLink = $('#downloadMasterLink');
+  if (downloadLink) downloadLink.style.display = 'none';
+  let masterBox = $('#masterGraphBox');
+  if (masterBox) masterBox.innerHTML = '';
+  let smallGrid = $('#smallGraphsGrid');
+  if (smallGrid) smallGrid.innerHTML = '';
+  let genBtn = $('#generateChartsBtn');
+  if (genBtn) {
+    genBtn.disabled = false;
+    genBtn.innerHTML = '📈 Generate Graphs';
+  }
 }
 
 async function loadCharts() {
