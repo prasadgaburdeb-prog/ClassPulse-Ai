@@ -1,5 +1,6 @@
 const $ = s => document.querySelector(s), app = $('#app');
 let user = null, preview = null, currentRiskFilter = 'all', chartsGenerated = false;
+let studentPage = 1, studentPageLimit = 15;
 
 const money = n => n == null ? 'Unavailable' : new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(n);
 
@@ -42,11 +43,13 @@ function form(kind) {
     <p class="small">Create your centre account to explore analytics and ML exam predictions.</p>
     <label>Centre name</label>
     <input name="centre_name" autocomplete="organization" required>
+    <label>Full Name</label>
+    <input name="full_name" placeholder="Administrator Name" required>
     <label>Email</label>
     <input name="email" type="email" autocomplete="email" required>
     <label>Password</label>
     <input name="password" type="password" autocomplete="new-password" minlength="8" required>
-    <p class="small">Use at least 8 characters.</p>
+    <p class="small">Use at least 8 characters with letters and numbers.</p>
     <button>Create centre account</button>
   `;
 
@@ -71,15 +74,19 @@ function dashboard() {
     <header>
       <div>
         <div class="brand">Class<span>Pulse</span> <span class="ai-badge">AI Predictor</span></div>
-        <div class="sub">${user.centre_name} · Real-Time Student Analytics & ML Pass Probability</div>
+        <div class="sub">${user.centre_name || 'ClassPulse Centre'} · Real-Time Student Analytics & ML Pass Probability</div>
       </div>
-      <button class="secondary" id="logout">Sign out</button>
+      <div style="display: flex; gap: 8px; align-items: center;">
+        <span class="badge" style="background:#e0e7ff; color:#3730a3; font-weight:600; text-transform:uppercase;">${user.role || 'Admin'}</span>
+        <button class="secondary" id="logout">Sign out</button>
+      </div>
     </header>
 
     <!-- Top Sticky Navigation Bar -->
     <nav class="dashboard-nav">
       <button class="nav-tab charts-tab" id="navCharts">📈 Matplotlib Charts (Master + 7 Small Graphs)</button>
       <button class="nav-tab" id="navKPIs">📊 Overview KPIs</button>
+      <button class="nav-tab" id="navStudents" style="background: #eef2ff; color: #4338ca; font-weight: 700;">👨‍🎓 Student Directory (360°)</button>
       <button class="nav-tab" id="navAI">🤖 AI Pass Predictor</button>
       <button class="nav-tab" id="navRecords">📋 Data Records</button>
       <button class="nav-tab" id="navImport">📁 Import Sheets</button>
@@ -119,8 +126,8 @@ function dashboard() {
       <!-- Compact placeholder shown before generating graphs to avoid taking blank space -->
       <div id="chartsPlaceholder" style="text-align: center; padding: 32px 20px; background: #f8fafc; border: 1px dashed var(--line); border-radius: 8px; margin-top: 14px;">
         <div style="font-size: 28px; margin-bottom: 6px;">📊</div>
-        <div style="font-weight: 700; font-size: 14px; color: var(--ink); margin-bottom: 4px;">Matplotlib Visualizations on Demand</div>
-        <p class="small" style="margin: 0 0 16px; color: var(--muted); max-width: 520px; margin-left: auto; margin-right: auto;">
+        <div id="placeholderTitle" style="font-weight: 700; font-size: 14px; color: var(--ink); margin-bottom: 4px;">Matplotlib Visualizations on Demand</div>
+        <p id="placeholderDesc" class="small" style="margin: 0 0 16px; color: var(--muted); max-width: 520px; margin-left: auto; margin-right: auto;">
           Generate the 6-panel executive Master Graph and 7 individual metric graphs (Attendance, Exams, Fees, Admissions, Risk, Pass Probability, and Correlation) for your filtered cohort.
         </p>
         <button id="generateChartsBtnPrompt" style="background: #2563eb; color: white; font-weight: 700; padding: 10px 24px; font-size: 14px; border-radius: 6px; border: none; cursor: pointer; box-shadow: 0 2px 8px rgba(37,99,235,0.25);">
@@ -159,24 +166,110 @@ function dashboard() {
       </div>
     </section>
 
+    <!-- 👨‍🎓 STUDENT DIRECTORY & 360-DEGREE PROFILE EXPLORER (FEAT-001 to FEAT-019) -->
+    <section class="panel" id="studentsSection" style="border-top: 3px solid #6366f1; scroll-margin-top: 70px;">
+      <div class="panel-header">
+        <div>
+          <h2>👨‍🎓 Student Directory & 360-Degree Profile Explorer</h2>
+          <p class="small">Search, inspect and download individual student academic histories, attendance trajectories, independent financial health, and AI pass predictions (FEAT-001 to FEAT-019).</p>
+        </div>
+        <div>
+          <a class="button" href="/api/v1/reports/pdf/cohort-summary" target="_blank" style="text-decoration: none; font-size: 12px; padding: 7px 14px; background: #4338ca; color: white;">⬇ Download Executive Cohort PDF Report</a>
+        </div>
+      </div>
+
+      <!-- Search & Filter Controls -->
+      <div style="display: flex; gap: 10px; margin: 14px 0; align-items: center; flex-wrap: wrap; background: #f8fafc; padding: 12px 14px; border-radius: 8px; border: 1px solid var(--line);">
+        <input id="studentSearchInput" placeholder="🔍 Search student name or ID..." style="max-width: 260px; font-size: 13px;">
+        <input id="studentCourseInput" placeholder="Course filter..." style="max-width: 140px; font-size: 13px;">
+        <input id="studentBatchInput" placeholder="Batch filter..." style="max-width: 140px; font-size: 13px;">
+        <select id="studentRiskSelect" style="font-size: 13px;">
+          <option value="">All Risk Tiers</option>
+          <option value="High Risk">High Risk</option>
+          <option value="Borderline">Borderline</option>
+          <option value="Safe">Safe</option>
+        </select>
+        <button id="studentFilterBtn" style="padding: 7px 16px; font-size: 13px;">Search</button>
+        <button id="studentResetBtn" class="secondary" style="padding: 7px 14px; font-size: 13px;">Reset</button>
+      </div>
+
+      <!-- Students Table Container -->
+      <div id="studentsTableWrap" class="table-wrap">
+        <p class="small" style="padding: 20px; text-align: center;">Loading student records...</p>
+      </div>
+
+      <!-- Pagination Controls -->
+      <div id="studentPagination" style="display: flex; justify-content: space-between; align-items: center; margin-top: 14px; padding-top: 10px; border-top: 1px solid var(--line);">
+        <button id="studentPrevBtn" class="secondary" style="padding: 5px 12px; font-size: 12px;">&larr; Previous</button>
+        <span id="studentPageInfo" class="small" style="font-weight: 600;">Page 1</span>
+        <button id="studentNextBtn" class="secondary" style="padding: 5px 12px; font-size: 12px;">Next &rarr;</button>
+      </div>
+    </section>
+
     <!-- MACHINE LEARNING PREDICTION SUITE -->
     <section class="panel" id="mlSection" style="border-top: 3px solid var(--accent); scroll-margin-top: 70px;">
       <div class="panel-header">
         <div>
           <h2>AI Student Exam Pass Predictor</h2>
-          <p class="small">Machine Learning model (Random Forest Classifier) analyzing attendance regularity, mock exam scores, fee adherence, and course benchmark rigor to predict student pass probabilities.</p>
+          <p class="small">Machine Learning model (Random Forest Classifier) analyzing attendance regularity, mock exam scores, and course benchmark rigor to predict student pass probabilities.</p>
         </div>
-        <button id="exportPredictions" class="secondary">Export Predictions (CSV)</button>
+        <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+          <a class="button" href="/api/v1/reports/pdf/cohort-summary" target="_blank" style="text-decoration:none; font-size:12px; padding: 7px 14px; background: #0284c7; color: white;">⬇ Cohort PDF Report</a>
+          <button id="exportPredictions" class="secondary">Export Predictions (CSV)</button>
+        </div>
       </div>
 
       <!-- Cohort Summary Metrics -->
       <div class="grid" id="mlSummaryCards"></div>
 
+      <!-- Model Governance & Provenance Audit Card (ML-011, ML-013, ML-030) -->
+      <div id="modelProvenanceCard" class="provenance-card">
+        <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 8px;">
+          <div style="font-weight: 700; color: var(--ink); font-size: 14px;">
+            🛡 Model Audit, Verification & Dataset Provenance
+          </div>
+          <div style="display: flex; gap: 6px; align-items: center;">
+            <span id="provBadge" class="badge" style="background:#e0f2fe; color:#0369a1; font-weight:700;">Loading provenance...</span>
+            <span id="provVersion" class="badge" style="background:#f1f5f9; color:#475569;">v2.1.0</span>
+          </div>
+        </div>
+        <div id="provMetricsGrid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; margin: 10px 0;">
+          <div style="background: white; padding: 8px 12px; border-radius: 6px; border: 1px solid var(--line);">
+            <div class="small" style="color:var(--muted);">Held-Out Test Acc</div>
+            <div id="provAcc" style="font-weight:700; font-size:15px; color:var(--safe);">--%</div>
+          </div>
+          <div style="background: white; padding: 8px 12px; border-radius: 6px; border: 1px solid var(--line);">
+            <div class="small" style="color:var(--muted);">F1 Score</div>
+            <div id="provF1" style="font-weight:700; font-size:15px; color:var(--ink);">--%</div>
+          </div>
+          <div style="background: white; padding: 8px 12px; border-radius: 6px; border: 1px solid var(--line);">
+            <div class="small" style="color:var(--muted);">ROC-AUC</div>
+            <div id="provAuc" style="font-weight:700; font-size:15px; color:var(--ink);">--%</div>
+          </div>
+          <div style="background: white; padding: 8px 12px; border-radius: 6px; border: 1px solid var(--line);">
+            <div class="small" style="color:var(--muted);">Brier Score Loss</div>
+            <div id="provBrier" style="font-weight:700; font-size:15px; color:var(--safe);">--</div>
+          </div>
+          <div style="background: white; padding: 8px 12px; border-radius: 6px; border: 1px solid var(--line);">
+            <div class="small" style="color:var(--muted);">5-Fold CV Accuracy</div>
+            <div id="provCv" style="font-weight:700; font-size:15px; color:#2563eb;">--%</div>
+          </div>
+        </div>
+        <div class="small" style="color:#475569; line-height:1.5;">
+          <strong>Risk Separation (ML-027):</strong> Pure academic predictive model. Student financial obligations and fee balances are evaluated strictly independently without introducing socioeconomic bias.
+          <br>
+          <strong>Statutory Disclaimer (ML-025):</strong> Pass probabilities are statistical projections designed to provide early pedagogical interventions. They do not guarantee final examination results.
+        </div>
+        <div style="margin-top: 10px; display: flex; justify-content: flex-end;">
+          <button id="retrainBtn" class="secondary" style="font-size: 12px; padding: 6px 12px;">🔄 Retrain on Centre's Historical Student Outcomes</button>
+        </div>
+      </div>
+
       <!-- Universal Spreadsheet Analyzer Box -->
       <div style="background: var(--info-light); border: 1px solid #b3e5fc; border-radius: 10px; padding: 14px 18px; margin: 16px 0;">
         <div style="font-weight: 700; color: #0277bd; font-size: 13px;">Universal Spreadsheet Ingestion & Automatic Schema Detection</div>
         <p class="small" style="margin: 4px 0 10px; color: #01579b;">
-          Works with <strong>ANY</strong> custom spreadsheet (CSV or Excel .xlsx). Upload school marks cards, attendance registers, or tuition rosters with custom column names (e.g. <em>Roll No, Student Name, Attendance %, Term Marks, Fees</em>). The AI auto-detects your columns and generates instant predictions!
+          Works with <strong>ANY</strong> custom spreadsheet (CSV or Excel .xlsx). Upload school marks cards, attendance registers, or tuition rosters with custom column names. The AI auto-detects your columns and generates instant predictions!
         </p>
         <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
           <input id="directSheetFile" type="file" accept=".csv, .xlsx" style="max-width: 320px; font-size: 12px; padding: 6px 10px; background: white;">
@@ -299,15 +392,36 @@ function dashboard() {
       <div id="history"></div>
     </section>
 
-    <!-- Account Actions -->
+    <!-- Account Actions & Database Backup -->
     <section class="panel">
       <h2>Metric definitions & Data Management</h2>
       <p id="definition" class="small"></p>
-      <div style="display: flex; gap: 10px; margin-top: 14px;">
+      <div style="display: flex; gap: 10px; margin-top: 14px; flex-wrap: wrap;">
+        <a class="button secondary" href="/api/v1/admin/backup" target="_blank" style="text-decoration: none; font-size: 13px;">💾 Download Secure Database Backup (DEP-004)</a>
         <button id="delete" class="danger">Delete imported data</button>
         <button id="deleteAccount" class="danger">Delete centre account</button>
       </div>
     </section>
+
+    <!-- 360-Degree Student Modal (FEAT-007 to FEAT-019) -->
+    <div id="studentModal" class="modal-backdrop">
+      <div class="modal-container">
+        <div class="modal-header">
+          <div>
+            <h3 id="modalStudentName">Student Profile</h3>
+            <span id="modalStudentId" class="small" style="color:var(--muted); font-weight:600;">--</span>
+          </div>
+          <button class="modal-close-btn" onclick="closeStudentModal()">&times;</button>
+        </div>
+        <div class="modal-body" id="modalStudentBody">
+          <!-- Populated dynamically -->
+        </div>
+        <div class="modal-footer">
+          <a id="modalDownloadPdfBtn" class="button" href="#" target="_blank" style="text-decoration:none; display:inline-flex; align-items:center; gap:6px;">⬇ Download Official PDF Report Card</a>
+          <button class="secondary" onclick="closeStudentModal()">Close</button>
+        </div>
+      </div>
+    </div>
   `;
 
   $('#logout').onclick = async () => {
@@ -329,6 +443,10 @@ function dashboard() {
   $('#navKPIs').onclick = () => {
     $('#filtersSection')?.scrollIntoView({ behavior: 'smooth' });
   };
+  $('#navStudents').onclick = () => {
+    $('#studentsSection')?.scrollIntoView({ behavior: 'smooth' });
+    highlightSection($('#studentsSection'));
+  };
   $('#navAI').onclick = () => {
     $('#mlSection')?.scrollIntoView({ behavior: 'smooth' });
     highlightSection($('#mlSection'));
@@ -344,11 +462,22 @@ function dashboard() {
     highlightSection($('#matplotlibSection'));
   };
 
-  $('#apply').onclick = () => { load(); loadPredictions(); if (chartsGenerated) loadCharts(); loadDetails(); };
+  $('#apply').onclick = () => {
+    load();
+    loadPredictions();
+    loadStudents();
+    if (chartsGenerated) loadCharts();
+    loadDetails();
+  };
   $('#resetFilters').onclick = () => {
     ['start', 'end', 'course', 'batch'].forEach(id => $('#' + id).value = '');
-    load(); loadPredictions(); if (chartsGenerated) loadCharts(); loadDetails();
+    load();
+    loadPredictions();
+    loadStudents();
+    if (chartsGenerated) loadCharts();
+    loadDetails();
   };
+
   $('#export').onclick = () => window.location = '/api/v1/reports/export?' + params();
   $('#exportPredictions').onclick = () => window.location = '/api/v1/ml/export-predictions?' + params() + (currentRiskFilter !== 'all' ? '&risk_level=' + currentRiskFilter : '');
   $('#directSheetBtn').onclick = analyzeDirectSheet;
@@ -357,14 +486,49 @@ function dashboard() {
   if ($('#generateChartsBtnPrompt')) $('#generateChartsBtnPrompt').onclick = onGenerateGraphsClick;
   $('#preview').onclick = upload;
   $('#detailsType').onchange = loadDetails;
+
   $('#delete').onclick = async () => {
-    if (confirm('Delete all imported records for this centre?')) {
+    if (confirm('Delete all imported records and student profiles for this centre?')) {
       await api('/api/v1/account/data', { method: 'DELETE' });
       resetChartsView();
-      load(); loadPredictions(); loadDetails();
+      load();
+      loadPredictions();
+      loadStudents();
+      loadDetails();
     }
   };
   $('#deleteAccount').onclick = deleteAccount;
+
+  // Student directory filters
+  $('#studentFilterBtn').onclick = () => { studentPage = 1; loadStudents(); };
+  $('#studentResetBtn').onclick = () => {
+    $('#studentSearchInput').value = '';
+    $('#studentCourseInput').value = '';
+    $('#studentBatchInput').value = '';
+    $('#studentRiskSelect').value = '';
+    studentPage = 1;
+    loadStudents();
+  };
+  $('#studentPrevBtn').onclick = () => {
+    if (studentPage > 1) { studentPage--; loadStudents(); }
+  };
+  $('#studentNextBtn').onclick = () => {
+    studentPage++; loadStudents();
+  };
+
+  // Retrain button
+  $('#retrainBtn').onclick = async () => {
+    if (confirm('Retrain model using verified historical student outcomes from your centre? (Requires >= 30 student records)')) {
+      try {
+        let res = await api('/api/v1/ml/retrain', { method: 'POST' });
+        alert(`Model retrained successfully! New version: ${res.model_version}, Accuracy: ${res.held_out_evaluation?.accuracy_pct || res.evaluation?.accuracy}%`);
+        loadModelProvenance();
+        loadPredictions();
+      } catch (err) {
+        alert(`Retraining notice: ${err.message}`);
+      }
+    }
+  };
 
   // Simulator event listeners
   ['simAtt', 'simMock', 'simFee', 'simCourse'].forEach(id => {
@@ -373,6 +537,8 @@ function dashboard() {
 
   load();
   loadPredictions();
+  loadStudents();
+  loadModelProvenance();
   loadDetails();
   runSimulation();
 }
@@ -386,11 +552,7 @@ function setRiskFilter(level) {
   ['all', 'high', 'borderline', 'safe'].forEach(k => {
     let btn = $('#filterRisk' + k.charAt(0).toUpperCase() + k.slice(1));
     if (btn) {
-      if (k === level) {
-        btn.className = 'risk-filter-btn';
-      } else {
-        btn.className = 'risk-filter-btn secondary';
-      }
+      btn.className = (k === level) ? 'risk-filter-btn' : 'risk-filter-btn secondary';
     }
   });
   loadPredictions();
@@ -434,6 +596,207 @@ async function load() {
   } catch (x) {
     console.error(x);
   }
+}
+
+async function loadModelProvenance() {
+  try {
+    let d = await api('/api/v1/ml/model-info');
+    $('#provBadge').textContent = d.dataset_provenance || 'synthetic_benchmark';
+    $('#provVersion').textContent = d.model_version || 'v2.1.0-benchmark';
+    let ev = d.held_out_evaluation || {};
+    $('#provAcc').textContent = (ev.test_accuracy_pct ?? ev.accuracy ?? '--') + '%';
+    $('#provF1').textContent = (ev.f1_score_pct ?? ev.f1_score ?? '--') + '%';
+    $('#provAuc').textContent = (ev.roc_auc_pct ?? ev.roc_auc ?? '--') + '%';
+    $('#provBrier').textContent = ev.brier_score_loss ?? '--';
+    let cv = d.cross_validation || {};
+    $('#provCv').textContent = (cv.mean_accuracy_pct ?? cv.mean_accuracy ?? '--') + '%';
+  } catch (e) {
+    console.warn('Could not load model provenance:', e);
+  }
+}
+
+async function loadStudents() {
+  try {
+    let q = new URLSearchParams();
+    let search = $('#studentSearchInput')?.value?.trim();
+    let course = $('#studentCourseInput')?.value?.trim();
+    let batch = $('#studentBatchInput')?.value?.trim();
+    let risk = $('#studentRiskSelect')?.value;
+
+    if (search) q.set('q', search);
+    if (course) q.set('course', course);
+    if (batch) q.set('batch', batch);
+    if (risk) q.set('risk_level', risk);
+    q.set('page', studentPage);
+    q.set('limit', studentPageLimit);
+
+    let d = await api('/api/v1/students?' + q.toString());
+    let students = d.students || [];
+    let total = d.total || 0;
+    let totalPages = Math.max(1, Math.ceil(total / studentPageLimit));
+
+    $('#studentPageInfo').textContent = `Page ${studentPage} of ${totalPages} (${total} students total)`;
+    $('#studentPrevBtn').disabled = (studentPage <= 1);
+    $('#studentNextBtn').disabled = (studentPage >= totalPages);
+
+    if (!students.length) {
+      $('#studentsTableWrap').innerHTML = '<p class="small" style="padding: 24px; text-align: center; color: var(--muted);">No student records found matching your search criteria.</p>';
+      return;
+    }
+
+    let rows = students.map(s => {
+      let riskClass = s.risk_level === 'High Risk' ? 'badge-danger' : s.risk_level === 'Borderline' ? 'badge-warning' : 'badge-success';
+      let feeClass = s.financial_status === 'Clear' ? 'badge-success' : s.financial_status === 'Overdue' ? 'badge-danger' : 'badge-warning';
+      return `
+        <tr>
+          <td><strong>${s.student_id}</strong></td>
+          <td>${s.name || s.student_id}</td>
+          <td>${s.course_id} <span class="small">(${s.batch_id})</span></td>
+          <td><strong>${s.attendance_rate}%</strong></td>
+          <td>${s.avg_mock_score != null ? `${s.avg_mock_score}/100` : '<span class="small" style="color:var(--muted)">Pending exam</span>'}</td>
+          <td><span class="badge ${feeClass}" title="Evaluated independently">${s.financial_status}</span></td>
+          <td>
+            <div style="display:flex; align-items:center; gap:8px;">
+              <span class="badge ${riskClass}">${s.risk_level}</span>
+              <strong>${s.pass_probability}%</strong>
+            </div>
+          </td>
+          <td>
+            <div style="display: flex; gap: 6px;">
+              <button class="button small" style="padding: 4px 8px; font-size: 11px;" onclick="openStudentModal('${s.student_id}')">👁 360° Profile</button>
+              <a class="button small secondary" style="padding: 4px 8px; font-size: 11px; text-decoration:none;" href="/api/v1/reports/pdf/student/${s.student_id}" target="_blank">⬇ PDF</a>
+            </div>
+          </td>
+        </tr>
+      `;
+    }).join('');
+
+    $('#studentsTableWrap').innerHTML = `
+      <table>
+        <thead>
+          <tr>
+            <th>Student ID</th>
+            <th>Name</th>
+            <th>Course / Batch</th>
+            <th>Attendance</th>
+            <th>Mock Avg</th>
+            <th>Fee Status (Independent)</th>
+            <th>AI Prediction</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${rows}
+        </tbody>
+      </table>
+    `;
+  } catch (err) {
+    console.error('Failed to load students:', err);
+    $('#studentsTableWrap').innerHTML = `<p class="notice error">Failed to load student directory: ${err.message}</p>`;
+  }
+}
+
+async function openStudentModal(studentId) {
+  let modal = $('#studentModal');
+  let body = $('#modalStudentBody');
+  modal.classList.add('active');
+  body.innerHTML = '<p class="small" style="padding:30px; text-align:center;">Loading 360-degree student profile...</p>';
+
+  try {
+    let d = await api(`/api/v1/students/${studentId}`);
+    let s = d.student;
+    let fin = d.financial_standing;
+    let pred = d.latest_prediction;
+
+    $('#modalStudentName').textContent = s.name || s.student_id;
+    $('#modalStudentId').textContent = `ID: ${s.student_id} · Course: ${s.course_id} · Batch: ${s.batch_id}`;
+    $('#modalDownloadPdfBtn').href = `/api/v1/reports/pdf/student/${s.student_id}`;
+
+    let riskColor = pred.risk_level === 'High Risk' ? 'var(--danger)' : pred.risk_level === 'Borderline' ? 'var(--warning)' : 'var(--safe)';
+    let riskBadge = pred.risk_level === 'High Risk' ? 'badge-danger' : pred.risk_level === 'Borderline' ? 'badge-warning' : 'badge-success';
+
+    let examsListHtml = d.mock_exams.length ? `
+      <table>
+        <tr><th>Exam Date</th><th>Score</th><th>Result</th></tr>
+        ${d.mock_exams.map(e => `<tr><td>${e.date}</td><td><strong>${e.score}</strong> / 100</td><td>${e.score >= 50 ? '<span class="badge badge-success">Passed</span>' : '<span class="badge badge-danger">Failed</span>'}</td></tr>`).join('')}
+      </table>
+    ` : '<p class="small" style="color:var(--muted);">No mock exams recorded yet.</p>';
+
+    let timelineHtml = (d.prediction_history && d.prediction_history.length) ? `
+      <div class="timeline">
+        ${d.prediction_history.map(h => `
+          <div class="timeline-item">
+            <div>
+              <strong>${new Date(h.created_at).toLocaleDateString()}</strong> &mdash; 
+              Predicted: <strong>${h.pass_probability}%</strong> (${h.predicted_outcome})
+            </div>
+            <div>
+              <span class="badge ${h.risk_level === 'High Risk' ? 'badge-danger' : h.risk_level === 'Borderline' ? 'badge-warning' : 'badge-success'}">${h.risk_level}</span>
+              <span class="small" style="color:var(--muted); margin-left:6px;">${h.model_version}</span>
+            </div>
+          </div>
+        `).join('')}
+      </div>
+    ` : '<p class="small" style="color:var(--muted);">Initial prediction recorded.</p>';
+
+    body.innerHTML = `
+      <!-- Top Academic & Financial Metric Cards -->
+      <div class="profile-grid">
+        <div class="profile-card">
+          <div class="lbl">Attendance Rate</div>
+          <div class="val" style="color:${d.attendance_summary.attendance_rate >= 75 ? 'var(--safe)' : 'var(--danger)'}">${d.attendance_summary.attendance_rate}%</div>
+          <div class="small">${d.attendance_summary.present_count} / ${d.attendance_summary.total_sessions} sessions</div>
+        </div>
+        <div class="profile-card">
+          <div class="lbl">Mock Exam Avg</div>
+          <div class="val">${d.avg_mock_score != null ? `${d.avg_mock_score}/100` : 'Pending'}</div>
+          <div class="small">${d.mock_exams.length} exams recorded</div>
+        </div>
+        <div class="profile-card">
+          <div class="lbl">Fee Clearance (Independent)</div>
+          <div class="val">${fin.clearance_pct}%</div>
+          <div class="small">${fin.outstanding_fees > 0 ? `Due: ${money(fin.outstanding_fees)}` : 'Cleared'}</div>
+        </div>
+        <div class="profile-card">
+          <div class="lbl">AI Pass Probability</div>
+          <div class="val" style="color:${riskColor}">${pred.pass_probability}%</div>
+          <div class="small"><span class="badge ${riskBadge}">${pred.risk_level}</span></div>
+        </div>
+      </div>
+
+      <!-- Section: Machine Learning Assessment & Transparent Factors -->
+      <div style="background:#f8fafc; border:1px solid var(--line); border-radius:8px; padding:14px 18px;">
+        <div style="font-weight:700; color:var(--ink); font-size:14px; margin-bottom:6px;">🤖 AI Exam Performance Projection</div>
+        <p class="small" style="margin:0 0 10px; color:var(--muted);">Evaluated strictly against academic indicators (Mock Exam Scores, Attendance Regularity & Course Rigor). Financial standing is kept fully independent.</p>
+        
+        <div style="margin-bottom:10px;">
+          <div class="label" style="margin-bottom:4px;">Contributing Factors & Guidance:</div>
+          <ul style="margin:0; padding-left:20px; font-size:13px; line-height:1.6;">
+            ${(pred.factors || []).map(f => `<li>${f}</li>`).join('')}
+          </ul>
+        </div>
+        <p class="small" style="color:#64748b; font-style:italic; margin:8px 0 0;">Notice: Predictions are statistical estimates for pedagogical support and do not guarantee final examination results.</p>
+      </div>
+
+      <!-- Section: Mock Exams History -->
+      <div>
+        <h4 style="margin:0 0 8px; font-size:14px; color:var(--ink);">Academic Mock Tests & Unit Assessments</h4>
+        ${examsListHtml}
+      </div>
+
+      <!-- Section: Historical Prediction Timeline (FEAT-011) -->
+      <div>
+        <h4 style="margin:0 0 8px; font-size:14px; color:var(--ink);">Prediction History Timeline</h4>
+        ${timelineHtml}
+      </div>
+    `;
+  } catch (err) {
+    body.innerHTML = `<p class="notice error">Failed to load student profile: ${err.message}</p>`;
+  }
+}
+
+function closeStudentModal() {
+  $('#studentModal')?.classList.remove('active');
 }
 
 async function loadPredictions() {
@@ -485,7 +848,7 @@ async function loadPredictions() {
     $('#modelDetailsText').innerHTML = `
       Algorithm: <strong>${s.model_name}</strong><br>
       Validation Accuracy: <strong>${s.model_accuracy}%</strong> &nbsp;|&nbsp; ROC-AUC: <strong>${s.model_roc_auc}%</strong><br>
-      Calibrated on real-world Indian coaching entrance examination benchmarks (JEE/NEET/Boards).
+      Calibrated on academic benchmarks (JEE/NEET/Foundation).
     `;
 
     // Render Student Predictions Table
@@ -514,7 +877,7 @@ function renderPredictionsList(preds, s) {
           <div class="small">${p.classes_attended} / ${p.total_classes} sessions</div>
         </td>
         <td>
-          ${p.has_mock_records ? `<strong>${p.avg_mock_score}</strong>/100` : `<span class="small" title="Estimated from attendance & course rigor">${p.avg_mock_score}/100 (est.)</span>`}
+          ${p.has_mock_records ? `<strong>${p.avg_mock_score}</strong>/100` : `<span class="small" style="color:var(--muted)">Pending exam</span>`}
         </td>
         <td>
           ${p.fee_clearance_pct}%
@@ -530,9 +893,7 @@ function renderPredictionsList(preds, s) {
         </td>
         <td><span class="badge ${badgeClass}">${p.risk_level}</span></td>
         <td>
-          <ul style="margin: 0; padding-left: 16px; font-size: 12px;">
-            ${p.recommendations.map(r => `<li>${r}</li>`).join('')}
-          </ul>
+          <button class="button small" style="padding:4px 8px; font-size:11px;" onclick="openStudentModal('${p.student_id}')">👁 View 360°</button>
         </td>
       </tr>
     `;
@@ -547,10 +908,10 @@ function renderPredictionsList(preds, s) {
           <th>Course / Batch</th>
           <th>Attendance</th>
           <th>Mock Score</th>
-          <th>Fee Status</th>
+          <th>Fee Status (Independent)</th>
           <th>Pass Probability</th>
           <th>Risk Level</th>
-          <th>AI Guidance & Recommended Action</th>
+          <th>Profile Action</th>
         </tr>
       </thead>
       <tbody>
@@ -562,20 +923,30 @@ function renderPredictionsList(preds, s) {
 
 function resetChartsView() {
   chartsGenerated = false;
-  let placeholder = $('#chartsPlaceholder');
-  if (placeholder) placeholder.style.display = 'block';
+  // Hide full chart content (master + small graphs) completely
   let content = $('#chartsContent');
   if (content) content.style.display = 'none';
   let downloadLink = $('#downloadMasterLink');
   if (downloadLink) downloadLink.style.display = 'none';
+  // Clear image data so no memory / blank boxes linger
   let masterBox = $('#masterGraphBox');
   if (masterBox) masterBox.innerHTML = '';
   let smallGrid = $('#smallGraphsGrid');
   if (smallGrid) smallGrid.innerHTML = '';
+  // Reset generate button
   let genBtn = $('#generateChartsBtn');
   if (genBtn) {
     genBtn.disabled = false;
     genBtn.innerHTML = '📈 Generate Graphs';
+  }
+  // Show compact placeholder with updated message
+  let placeholder = $('#chartsPlaceholder');
+  if (placeholder) {
+    placeholder.style.display = 'block';
+    let pTitle = $('#placeholderTitle');
+    let pDesc = $('#placeholderDesc');
+    if (pTitle) pTitle.textContent = 'No Data Available';
+    if (pDesc) pDesc.textContent = 'Import a student spreadsheet, then click Generate Graphs to create visualizations.';
   }
 }
 
@@ -606,6 +977,30 @@ async function loadCharts() {
   try {
     let q = params();
     let d = await api('/api/v1/charts/all?' + q);
+
+    // ── No-data guard: if the backend has zero records, collapse the section ──
+    if (!d.has_data || d.record_count === 0) {
+      chartsGenerated = false;
+      let placeholder = $('#chartsPlaceholder');
+      if (placeholder) {
+        placeholder.style.display = 'block';
+        let pTitle = $('#placeholderTitle');
+        let pDesc  = $('#placeholderDesc');
+        if (pTitle) pTitle.textContent = 'No Data to Visualize';
+        if (pDesc)  pDesc.textContent  = 'Upload a student spreadsheet first, then click Generate Graphs to see the Matplotlib visualizations.';
+      }
+      let content = $('#chartsContent');
+      if (content) content.style.display = 'none';
+      let downloadLink = $('#downloadMasterLink');
+      if (downloadLink) downloadLink.style.display = 'none';
+      let masterBox  = $('#masterGraphBox');
+      let smallGrid  = $('#smallGraphsGrid');
+      if (masterBox)  masterBox.innerHTML  = '';
+      if (smallGrid)  smallGrid.innerHTML  = '';
+      if (genBtn) { genBtn.disabled = false; genBtn.innerHTML = '📈 Generate Graphs'; }
+      return;
+    }
+
     renderChartsBundle(d, q.toString());
   } catch (err) {
     console.error('Failed to load Matplotlib charts:', err);
@@ -752,7 +1147,6 @@ async function analyzeDirectSheet() {
   }
 }
 
-
 async function runSimulation() {
   let att = parseFloat($('#simAtt').value);
   let mock = parseFloat($('#simMock').value);
@@ -836,6 +1230,7 @@ async function confirmImport() {
     $('#importResult').innerHTML = '<p class="notice">' + r.message + ' ' + r.accepted_rows + ' rows imported.</p>';
     load();
     loadPredictions();
+    loadStudents();
     if (chartsGenerated) loadCharts();
     loadDetails();
   } catch (x) {

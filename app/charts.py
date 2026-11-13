@@ -775,7 +775,8 @@ def generate_small_graph(
 def generate_all_charts(
     records: List[Dict[str, Any]],
     ml_predictions: Optional[Dict[str, Any]] = None,
-    centre_name: str = "ClassPulse Analytics"
+    centre_name: str = "ClassPulse Analytics",
+    filters_applied: Optional[Dict[str, Any]] = None
 ) -> Dict[str, Any]:
     """
     Generates all small graphs and the master graph, returning them as
@@ -795,10 +796,13 @@ def generate_all_charts(
         as_base64=True
     )
 
+    metrics = _extract_dataset_metrics(records, ml_predictions)
     return {
         "master_graph": master_chart,
         "small_graphs": small_charts,
-        "metrics_summary": _extract_dataset_metrics(records, ml_predictions)
+        "metrics_summary": metrics,
+        "record_count": len(records),
+        "has_data": len(records) > 0
     }
 
 
