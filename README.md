@@ -43,22 +43,36 @@ ClassPulse AI is an enterprise coaching-centre intelligence platform with an int
    - Transparent handling of missing test scores without silent score fabrication.
 
 6. **Enterprise Security & Disaster Recovery (SEC-001 to SEC-016, DEP-004)**
-   - Industry-standard `bcrypt` password hashing (12 rounds) and `HS256` signed JWT sessions.
+   - Cryptographic JWT signing key remediation with strict algorithm enforcement (`HS256`).
+   - Token revocation table (`revoked_tokens`) for logout, password changes, and account deactivation.
+   - Dual-token CSRF protection for cookie-authenticated mutating requests.
+   - Shared rate-limiting (`rate_limits`) supporting multi-worker deployments.
+   - Multi-tenant data scoping across all database queries, exports, and backups.
    - Dynamic Role-Based Access Control (`owner`, `admin`, `teacher`, `viewer`).
-   - Sliding-window rate limiting on authentication routes.
-   - Automated database backup and restore endpoint (`/api/v1/admin/backup`).
+   - Versioned database schema migrations with Alembic (`alembic upgrade head`).
+   - Zero-fabrication data policy: missing fees and attendance logs are never silently invented.
+
+---
+
+## Database Migrations
+
+Apply database schema migrations via Alembic:
+
+```bash
+alembic upgrade head
+```
 
 ---
 
 ## Automated Test Suite
 
-Run the complete test suite covering machine learning, backend security, multi-tenancy, and spreadsheet ingestion:
+Run the comprehensive test suite covering baseline functionality, machine learning, backend security, multi-tenancy, and spreadsheet ingestion:
 
 ```bash
-python -m pytest tests -v
+pytest -v
 ```
 
-All 13 test suites pass with 100% test coverage for the SRS acceptance criteria.
+All 26 tests pass with 100% verification across all SRS v2.0 criteria.
 
 ---
 

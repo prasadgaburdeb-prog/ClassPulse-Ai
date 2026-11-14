@@ -1,74 +1,96 @@
-# ClassPulse AI — Deployment Guide & Production Configuration
+# ClassPulse AI — Deployment Guide & Production Configuration (v2.0 Hardened)
 
-## 1. Environment Requirements
+## 1. System Requirements
 
-- **Python Version:** 3.11+ (Fully verified on Python 3.14)
+- **Python Version:** 3.11+ (Verified on Python 3.14)
 - **Supported Databases:**
-  - SQLite (Embedded file-based, default for single-node / development)
-  - MySQL / MariaDB (Recommended for multi-worker production deployments)
-- **Operating Systems:** Windows 10/11, Ubuntu 22.04 LTS+, Debian, macOS
+  - SQLite (Local single-node development & testing: `sqlite:///./classpulse.db`)
+  - PostgreSQL / MySQL (Production multi-worker deployments: `mysql+pymysql://...` or `postgresql+psycopg2://...`)
+- **Supported OS:** Windows 10/11, Ubuntu 22.04 LTS+, Debian 12+, macOS
 
 ---
 
 ## 2. Environment Variables Configuration
 
-Create a `.env` file in the project root:
+Create a `.env` file in the project root based on `.env.example`:
 
 ```ini
-# Environment
-ENV=production
+# Application Environment
+APP_ENV=production
+DEBUG=false
 
-# Database Configuration (DEP-002, DEP-003)
-# For SQLite (default):
+# Database Configuration
 DATABASE_URL=sqlite:///./classpulse.db
 
-# For MySQL (Production):
-# DATABASE_URL=mysql+pymysql://username:password@127.0.0.1:3306/classpulse?charset=utf8mb4
+# Cryptographic JWT Signing Key (Mandatory in production, >= 32 characters)
+# Generate via: python -c "import secrets; print(secrets.token_urlsafe(64))"
+JWT_SECRET_KEY=replace-with-a-secure-random-64-character-secret-in-production
 
-# Security Secrets (SEC-002)
-# Generate a strong 32-character key: python -c "import secrets; print(secrets.token_hex(32))"
-SECRET_KEY=c3f19a089e02c610996fbdeca6bc444857b22031c19b0d2d38eac4b2383c2e17
+# JWT Claims Configuration
+JWT_ALGORITHM=HS256
+JWT_ISSUER=classpulse-ai
+JWT_AUDIENCE=classpulse-client
+ACCESS_TOKEN_TTL_MINUTES=30
 
-# Cookie & Domain Security (SEC-005, SEC-015)
+# Cookie & CSRF Security
 COOKIE_SECURE=true
-ALLOWED_ORIGINS=https://classpulse.yourdomain.edu,https://app.yourdomain.edu
+COOKIE_SAMESITE=lax
+
+# Allowed CORS Origins (comma-separated, wildcards rejected in production)
+CORS_ALLOWED_ORIGINS=https://classpulse.yourdomain.edu,https://app.yourdomain.edu
+
+# File Upload Limit (MB)
+MAX_UPLOAD_MB=15
+```
+
+> [!WARNING]
+> Never use the compromised key `classpulse-super-secure-production-jwt-key-2026-deb-prasad`. The application will immediately abort startup if this key is detected in production.
+
+---
+
+## 3. Database Migrations (Alembic)
+
+ClassPulse AI uses Alembic for controlled, versioned database schema migrations:
+
+```bash
+# Check current migration revision
+alembic current
+
+# Run all pending migrations
+alembic upgrade head
+
+# Rollback to baseline schema if needed
+# alembic downgrade 001_initial_schema
 ```
 
 ---
 
-## 3. Installation & Startup
+## 4. Zero-Downtime Key Rotation Runbook (SEC-JWT-04)
+
+When rotating the JWT signing key:
+
+1. **Generate New Key:**
+   ```bash
+   python -c "import secrets; print(secrets.token_urlsafe(64))"
+   ```
+2. **Scheduled Rotation Window:**
+   - In low-traffic hours, update `JWT_SECRET_KEY` in your environment management system (or secret manager).
+   - Because active access tokens expire within `ACCESS_TOKEN_TTL_MINUTES` (default: 30 minutes), users will smoothly re-authenticate.
+3. **Emergency Invalidation of Compromised Keys:**
+   - If a key exposure is suspected, add the compromised key to `COMPROMISED_KEYS` in `app/main.py`.
+   - The application automatically rejects all tokens signed with that key, forcing immediate re-authentication.
+
+---
+
+## 5. Startup and Execution
 
 ```bash
-# Clone the repository
-git clone https://github.com/your-org/ClassPulse-Ai.git
-cd ClassPulse-Ai
-
-# Create virtual environment
-python -m venv venv
-source venv/bin/activate  # On Windows: .\venv\Scripts\activate
-
 # Install dependencies
 pip install -r requirements.txt
 
-# Run database schema migrations
-python -c "from app.main import ensure_database_migrations; ensure_database_migrations()"
+# Execute automated test suite
+pytest tests -v
 
-# Run automated test suite
-python -m pytest tests -v
-
-# Start production server with Uvicorn
-python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 4
+# Run production server
+uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 4
 ```
-
----
-
-## 4. Production Security Checklist
-
-- [x] Passwords hashed with `bcrypt` (12 rounds)
-- [x] JWT tokens with 24-hour expiration (`HS256`)
-- [x] Sliding-window rate limiting on login/registration endpoints
-- [x] Multi-tenant scoping enforced on every ORM query
-- [x] Dynamic Role-Based Access Control (`owner`, `admin`, `teacher`, `viewer`)
-- [x] CSRF protection for session cookies
-- [x] No-cache headers on dynamic analytical data
-- [x] Automated database backup endpoint (`/api/v1/admin/backup`)

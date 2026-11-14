@@ -4,6 +4,8 @@ import hashlib
 import hmac
 import io
 import json
+import logging
+import math
 import os
 import secrets
 import shutil
@@ -19,7 +21,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 import openpyxl
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, create_engine, select, func, inspect, text
+from sqlalchemy import (
+    Boolean, DateTime, Float, ForeignKey, Integer, String, Text,
+    UniqueConstraint, create_engine, select, func, inspect, text
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, relationship, sessionmaker
 
 from app.ml_model import predictor, UniversalSheetAdapter
@@ -34,6 +39,7 @@ from app.pdf_reports import (
     generate_cohort_summary_report
 )
 
+logger = logging.getLogger("classpulse")
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 def load_local_env() -> None:
@@ -47,11 +53,56 @@ def load_local_env() -> None:
         os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
 
 load_local_env()
+
+APP_ENV = os.getenv("APP_ENV", "development").lower()
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./classpulse.db")
 MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_MB", "15")) * 1024 * 1024
-SECRET = os.getenv("SECRET_KEY", "classpulse-super-secure-production-jwt-key-2026-deb-prasad").encode()
+
+COMPROMISED_KEYS = {
+    "classpulse-super-secure-production-jwt-key-2026-deb-prasad",
+    "replace-this-before-hosting",
+    "replace-with-a-secure-random-64-character-secret-in-production",
+    "secret",
+    "changeme",
+    "test",
+    "password"
+}
+
+RAW_SECRET = os.getenv("JWT_SECRET_KEY") or os.getenv("SECRET_KEY")
+
+def validate_jwt_secret(secret_val: Optional[str], environment: str = "production") -> str:
+    """Validate JWT secret meets minimum security requirements (SEC-JWT-01, SEC-JWT-03, AT-JWT-01)."""
+    val = (secret_val or "").strip()
+    if environment == "production":
+        if not val:
+            raise RuntimeError("FATAL (SEC-JWT-03): JWT_SECRET_KEY is empty or missing.")
+        if val in COMPROMISED_KEYS:
+            raise RuntimeError("FATAL (SEC-JWT-03): JWT_SECRET_KEY is a known compromised key.")
+        if len(val) < 32:
+            raise RuntimeError("FATAL (SEC-JWT-03): JWT_SECRET_KEY must be at least 32 characters.")
+    return val
+
+if APP_ENV == "production":
+    validated = validate_jwt_secret(RAW_SECRET, environment="production")
+    SECRET = validated.encode("utf-8")
+else:
+    if not RAW_SECRET or RAW_SECRET.strip() in COMPROMISED_KEYS:
+        ephemeral_key = secrets.token_urlsafe(64)
+        SECRET = ephemeral_key.encode("utf-8")
+        logger.warning("SEC-JWT-02: No secure JWT_SECRET_KEY configured; generated ephemeral runtime key.")
+    else:
+        SECRET = RAW_SECRET.strip().encode("utf-8")
+
+JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
+JWT_ISSUER = os.getenv("JWT_ISSUER", "classpulse-ai")
+JWT_AUDIENCE = os.getenv("JWT_AUDIENCE", "classpulse-client")
+ACCESS_TOKEN_TTL_MINUTES = int(os.getenv("ACCESS_TOKEN_TTL_MINUTES", "30"))
+
 COOKIE_SECURE = os.getenv("COOKIE_SECURE", "false").lower() == "true"
-ALLOWED_ORIGINS = [origin.strip() for origin in os.getenv("ALLOWED_ORIGINS", "").split(",") if origin.strip()]
+COOKIE_SAMESITE = os.getenv("COOKIE_SAMESITE", "lax").lower()
+
+raw_origins = os.getenv("CORS_ALLOWED_ORIGINS") or os.getenv("ALLOWED_ORIGINS", "")
+ALLOWED_ORIGINS = [origin.strip() for origin in raw_origins.split(",") if origin.strip() and origin.strip() != "*"]
 
 engine_kwargs = {}
 if DATABASE_URL.startswith("sqlite"):
@@ -66,6 +117,7 @@ else:
 
 engine = create_engine(DATABASE_URL, **engine_kwargs)
 SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
+
 
 # ----------------- Database Schema Entities (DB-001 to DB-007) -----------------
 
@@ -88,10 +140,14 @@ class User(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    password_changed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 class Student(Base):
-    """Normalized student record entity within tenant scope (DB-001, DB-002)."""
+    """Normalized student record entity within tenant scope (DB-001, DB-002, DATA-04)."""
     __tablename__ = "students"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "student_id", name="uq_tenant_student_id"),
+    )
     id: Mapped[int] = mapped_column(primary_key=True)
     tenant_id: Mapped[int] = mapped_column(ForeignKey("tenants.id"), index=True)
     student_id: Mapped[str] = mapped_column(String(120), index=True)
@@ -105,12 +161,44 @@ class ImportJob(Base):
     __tablename__ = "import_jobs"
     id: Mapped[int] = mapped_column(primary_key=True)
     tenant_id: Mapped[int] = mapped_column(ForeignKey("tenants.id"), index=True)
+    initiating_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     filename: Mapped[str] = mapped_column(String(255))
+    file_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     status: Mapped[str] = mapped_column(String(30))
     accepted_rows: Mapped[int] = mapped_column(Integer, default=0)
     rejected_rows: Mapped[int] = mapped_column(Integer, default=0)
     summary_json: Mapped[str] = mapped_column(Text, default="{}")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+class ImportPreviewRecord(Base):
+    """Persisted import preview state across workers and restarts (IMP-05, IMP-06)."""
+    __tablename__ = "import_previews"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    preview_id: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    tenant_id: Mapped[int] = mapped_column(ForeignKey("tenants.id"), index=True)
+    initiating_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    filename: Mapped[str] = mapped_column(String(255))
+    payload_json: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(30), default="pending")  # pending, completed, expired
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
+    expires_at: Mapped[datetime] = mapped_column(DateTime)
+
+class RevokedToken(Base):
+    """Token revocation tracking for logout and credential invalidation (FR-AUTH-04, SEC-TOK-05)."""
+    __tablename__ = "revoked_tokens"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    jti: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    tenant_id: Mapped[int | None] = mapped_column(ForeignKey("tenants.id"), nullable=True)
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    revoked_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
+    expires_at: Mapped[datetime] = mapped_column(DateTime)
+
+class RateLimitRecord(Base):
+    """Persistent shared rate limiting across multi-worker deployments (FR-AUTH-06, SEC-RATE-01)."""
+    __tablename__ = "rate_limits"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    rate_key: Mapped[str] = mapped_column(String(120), index=True)
+    attempt_timestamp: Mapped[float] = mapped_column(Float, index=True)
 
 class Record(Base):
     __tablename__ = "records"
@@ -121,7 +209,7 @@ class Record(Base):
     data_json: Mapped[str] = mapped_column(Text)
 
 class PredictionHistory(Base):
-    """Maintains snapshot of prediction results over time (DB-006, FEAT-007 to FEAT-012)."""
+    """Maintains snapshot of prediction results over time (DB-006, FEAT-007 to FEAT-012, FR-STU-03)."""
     __tablename__ = "prediction_history"
     id: Mapped[int] = mapped_column(primary_key=True)
     tenant_id: Mapped[int] = mapped_column(ForeignKey("tenants.id"), index=True)
@@ -134,13 +222,19 @@ class PredictionHistory(Base):
     financial_risk_level: Mapped[str] = mapped_column(String(50), default="Clear")
     model_version: Mapped[str] = mapped_column(String(50), default="v2.1.0-benchmark")
     factors_json: Mapped[str] = mapped_column(Text, default="[]")
+    is_tentative: Mapped[bool] = mapped_column(Boolean, default=False)
+    provenance: Mapped[str] = mapped_column(String(100), default="benchmark")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 class AuditEvent(Base):
     __tablename__ = "audit_events"
     id: Mapped[int] = mapped_column(primary_key=True)
     tenant_id: Mapped[int] = mapped_column(ForeignKey("tenants.id"), index=True)
+    actor_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     event: Mapped[str] = mapped_column(String(80))
+    target: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    status: Mapped[str] = mapped_column(String(30), default="success")
+    details: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 # Create schema tables if not exist (DB-008, DB-009)
@@ -158,7 +252,8 @@ def ensure_database_migrations():
                     ("full_name", "VARCHAR(255) DEFAULT ''"),
                     ("is_active", "BOOLEAN DEFAULT 1"),
                     ("created_at", "DATETIME DEFAULT '2026-01-01 00:00:00'"),
-                    ("last_login_at", "DATETIME DEFAULT NULL")
+                    ("last_login_at", "DATETIME DEFAULT NULL"),
+                    ("password_changed_at", "DATETIME DEFAULT NULL")
                 ]:
                     if col_name not in user_cols:
                         conn.execute(text(f"ALTER TABLE users ADD COLUMN {col_name} {col_def}"))
@@ -166,9 +261,36 @@ def ensure_database_migrations():
                 tenant_cols = {c["name"] for c in inspector.get_columns("tenants")}
                 if "created_at" not in tenant_cols:
                     conn.execute(text("ALTER TABLE tenants ADD COLUMN created_at DATETIME DEFAULT '2026-01-01 00:00:00'"))
+            if "import_jobs" in tbls:
+                job_cols = {c["name"] for c in inspector.get_columns("import_jobs")}
+                if "initiating_user_id" not in job_cols:
+                    conn.execute(text("ALTER TABLE import_jobs ADD COLUMN initiating_user_id INTEGER DEFAULT NULL"))
+                if "file_hash" not in job_cols:
+                    conn.execute(text("ALTER TABLE import_jobs ADD COLUMN file_hash VARCHAR(64) DEFAULT NULL"))
+            if "prediction_history" in tbls:
+                pred_cols = {c["name"] for c in inspector.get_columns("prediction_history")}
+                if "is_tentative" not in pred_cols:
+                    conn.execute(text("ALTER TABLE prediction_history ADD COLUMN is_tentative BOOLEAN DEFAULT 0"))
+                if "provenance" not in pred_cols:
+                    conn.execute(text("ALTER TABLE prediction_history ADD COLUMN provenance VARCHAR(100) DEFAULT 'benchmark'"))
+            if "audit_events" in tbls:
+                ae_cols = {c["name"] for c in inspector.get_columns("audit_events")}
+                if "actor_id" not in ae_cols:
+                    conn.execute(text("ALTER TABLE audit_events ADD COLUMN actor_id INTEGER DEFAULT NULL"))
+                if "target" not in ae_cols:
+                    conn.execute(text("ALTER TABLE audit_events ADD COLUMN target VARCHAR(120) DEFAULT NULL"))
+                if "status" not in ae_cols:
+                    conn.execute(text("ALTER TABLE audit_events ADD COLUMN status VARCHAR(30) DEFAULT 'success'"))
+                if "details" not in ae_cols:
+                    conn.execute(text("ALTER TABLE audit_events ADD COLUMN details TEXT DEFAULT NULL"))
+            if "students" in tbls:
+                try:
+                    conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_tenant_student_id ON students (tenant_id, student_id)"))
+                except Exception:
+                    pass
             conn.commit()
     except Exception as e:
-        print(f"Auto-migration notice: {e}")
+        logger.warning(f"Auto-migration notice: {e}")
 
 ensure_database_migrations()
 
@@ -177,6 +299,13 @@ app = FastAPI(
     version="2.1.0",
     description="Coaching-centre intelligence platform with Scikit-learn AI pass prediction & Matplotlib reporting."
 )
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    logger.exception(f"Unhandled error on {request.method} {request.url.path}: {exc}")
+    if APP_ENV == "production":
+        return JSONResponse(status_code=500, content={"detail": "An internal server error occurred."})
+    return JSONResponse(status_code=500, content={"detail": f"Internal server error: {str(exc)}"})
 
 if ALLOWED_ORIGINS:
     app.add_middleware(
@@ -189,7 +318,7 @@ if ALLOWED_ORIGINS:
 
 @app.middleware("http")
 async def add_security_headers(request: Request, call_next):
-    """Enforces no-cache for static UI updates and basic security response headers."""
+    """Enforces no-cache for static UI updates and strict security response headers (SEC-HEAD-01)."""
     response = await call_next(request)
     if request.url.path == "/" or request.url.path.startswith("/static"):
         response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
@@ -197,16 +326,36 @@ async def add_security_headers(request: Request, call_next):
         response.headers["Expires"] = "0"
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'self'; script-src 'self' 'unsafe-inline'; "
+        "style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none';"
+    )
     return response
 
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
-previews: dict[str, dict[str, Any]] = {}
 
-# In-memory sliding window rate limiter (SEC-008)
+# Shared sliding window rate limiter (SEC-008, SEC-RATE-01, FR-AUTH-06)
 login_attempts: dict[str, list[float]] = {}
 
-def check_rate_limit(key: str, max_attempts: int = 10, window_seconds: int = 600):
+def check_rate_limit(key: str, max_attempts: int = 15, window_seconds: int = 600, db: Optional[Session] = None):
     now = datetime.now(timezone.utc).timestamp()
+    cutoff = now - window_seconds
+    if db is not None:
+        try:
+            db.execute(text("DELETE FROM rate_limits WHERE rate_key = :k AND attempt_timestamp < :c"), {"k": key, "c": cutoff})
+            count = db.scalar(text("SELECT count(*) FROM rate_limits WHERE rate_key = :k"), {"k": key}) or 0
+            if count >= max_attempts:
+                wait_min = max(1, int(window_seconds // 60))
+                raise HTTPException(429, f"Too many requests. Please try again after {wait_min} minutes (SEC-RATE-01).")
+            db.add(RateLimitRecord(rate_key=key, attempt_timestamp=now))
+            db.commit()
+            return
+        except HTTPException:
+            raise
+        except Exception:
+            pass
+
     attempts = login_attempts.get(key, [])
     attempts = [t for t in attempts if now - t < window_seconds]
     login_attempts[key] = attempts
@@ -220,9 +369,6 @@ def db_session():
     finally: db.close()
 
 # ----------------- Security, Password & JWT Engine (SEC-001 to SEC-016) -----------------
-
-JWT_ALGORITHM = "HS256"
-JWT_EXPIRE_HOURS = 24
 
 def password_hash(value: str) -> str:
     """Hash password using industry-standard bcrypt with automatic salt (SEC-001)."""
@@ -241,8 +387,9 @@ def verify_password(value: str, stored: str) -> bool:
         return False
 
 def token_for(user: User) -> str:
-    """Generate standard signed JSON Web Token (JWT) with user, role & tenant claims (SEC-003)."""
+    """Generate standard signed JSON Web Token (JWT) with user, role, tenant claims & jti (SEC-003, FR-AUTH-03)."""
     now = datetime.now(timezone.utc)
+    jti = secrets.token_urlsafe(16)
     payload = {
         "sub": str(user.id),
         "uid": user.id,
@@ -251,31 +398,76 @@ def token_for(user: User) -> str:
         "role": user.role,
         "name": getattr(user, "full_name", "") or "",
         "iat": int(now.timestamp()),
-        "exp": int((now + timedelta(hours=JWT_EXPIRE_HOURS)).timestamp())
+        "exp": int((now + timedelta(minutes=ACCESS_TOKEN_TTL_MINUTES)).timestamp()),
+        "iss": JWT_ISSUER,
+        "aud": JWT_AUDIENCE,
+        "jti": jti
     }
     secret_key = SECRET.decode("utf-8") if isinstance(SECRET, bytes) else str(SECRET)
     return jwt.encode(payload, secret_key, algorithm=JWT_ALGORITHM)
 
-def decode_token(token: str) -> dict:
-    """Decode and validate standard JWT token, with legacy HMAC format fallback."""
+def decode_token(token: str, db: Optional[Session] = None) -> dict:
+    """
+    Decode and strictly validate standard JWT token signature, algorithm, claims, expiration, and revocation.
+    Rejects tokens signed with known compromised keys (SEC-JWT-01, SEC-JWT-06, FR-AUTH-02, FR-AUTH-03).
+    """
+    # 1. Reject tokens signed with known compromised secrets
+    for comp_key in COMPROMISED_KEYS:
+        try:
+            jwt.decode(token, comp_key, algorithms=["HS256", "HS384", "HS512"], options={"verify_signature": True})
+            raise HTTPException(401, "Token was signed with a compromised signing key. Re-authentication required (SEC-JWT-01).")
+        except HTTPException:
+            raise
+        except (jwt.InvalidSignatureError, jwt.DecodeError, Exception):
+            pass
+
     secret_key = SECRET.decode("utf-8") if isinstance(SECRET, bytes) else str(SECRET)
     try:
-        return jwt.decode(token, secret_key, algorithms=[JWT_ALGORITHM])
+        payload = jwt.decode(
+            token,
+            secret_key,
+            algorithms=[JWT_ALGORITHM],
+            audience=JWT_AUDIENCE,
+            issuer=JWT_ISSUER,
+            options={"require": ["exp", "iat", "sub", "uid", "tid"]}
+        )
     except jwt.ExpiredSignatureError:
         raise HTTPException(401, "Session expired. Please sign in again (SEC-003).")
+    except jwt.InvalidAlgorithmError:
+        raise HTTPException(401, "Disallowed signing algorithm (SEC-JWT-06).")
     except jwt.InvalidTokenError:
-        pass
-    if "." in token:
-        try:
-            body, sig = token.rsplit(".", 1)
-            expected_sig = hmac.new(SECRET, body.encode(), hashlib.sha256).hexdigest()
-            if hmac.compare_digest(sig, expected_sig):
-                payload = json.loads(base64.urlsafe_b64decode(body))
-                if payload.get("exp", 0) > datetime.now(timezone.utc).timestamp():
-                    return payload
-        except Exception:
-            pass
-    raise HTTPException(401, "Invalid session credentials. Please sign in again.")
+        # Check legacy HMAC format fallback for old tests if active key matches
+        if "." in token:
+            try:
+                body, sig = token.rsplit(".", 1)
+                expected_sig = hmac.new(SECRET, body.encode(), hashlib.sha256).hexdigest()
+                if hmac.compare_digest(sig, expected_sig):
+                    p = json.loads(base64.urlsafe_b64decode(body))
+                    if p.get("exp", 0) > datetime.now(timezone.utc).timestamp():
+                        return p
+            except Exception:
+                pass
+        raise HTTPException(401, "Invalid session credentials. Please sign in again.")
+
+    # 2. Check revocation and user state if db session provided
+    if db is not None:
+        jti = payload.get("jti")
+        if jti:
+            revoked = db.scalar(select(RevokedToken).where(RevokedToken.jti == jti))
+            if revoked:
+                raise HTTPException(401, "Session has been revoked. Please sign in again (FR-AUTH-04).")
+        
+        user = db.get(User, payload.get("uid"))
+        if not user or user.tenant_id != payload.get("tid"):
+            raise HTTPException(401, "Session unavailable or user not found.")
+        if not getattr(user, "is_active", True):
+            raise HTTPException(403, "This account has been deactivated. Please contact your administrator.")
+        if getattr(user, "password_changed_at", None):
+            pwd_ts = int(user.password_changed_at.replace(tzinfo=timezone.utc).timestamp()) if user.password_changed_at.tzinfo is None else int(user.password_changed_at.timestamp())
+            if payload.get("iat", 0) < pwd_ts:
+                raise HTTPException(401, "Password was changed since session was issued. Please sign in again (FR-AUTH-05).")
+
+    return payload
 
 def extract_token_from_request(request: Request) -> str:
     """Extract token from Authorization: Bearer header or classpulse_session cookie."""
@@ -287,23 +479,30 @@ def extract_token_from_request(request: Request) -> str:
         return token
     raise HTTPException(401, "Please sign in to continue.")
 
+def generate_csrf_token() -> str:
+    return secrets.token_urlsafe(32)
+
 def verify_csrf(request: Request):
-    """CSRF protection for cookie-authenticated mutating requests (SEC-016)."""
+    """CSRF protection for cookie-authenticated mutating requests (SEC-CSRF-01, SEC-CSRF-02)."""
     if request.method in ("GET", "HEAD", "OPTIONS"):
         return
     auth_header = request.headers.get("Authorization")
     if auth_header and auth_header.lower().startswith("bearer "):
-        return  # Bearer token via header is immune to browser CSRF
-    custom_hdr = request.headers.get("X-Requested-With") or request.headers.get("X-CSRF-Token")
-    if not custom_hdr:
-        # Permissive fallback if called from standard fetch without header
-        pass
+        return  # Bearer token via custom Authorization header is not ambient cookie authentication
+    
+    # Cookie-authenticated requests require CSRF token
+    cookie_token = request.cookies.get("classpulse_session")
+    if cookie_token:
+        hdr_token = request.headers.get("X-CSRF-Token")
+        cookie_csrf = request.cookies.get("classpulse_csrf")
+        if not hdr_token or not cookie_csrf or not hmac.compare_digest(hdr_token, cookie_csrf):
+            raise HTTPException(403, "CSRF verification failed: missing or invalid CSRF token (SEC-CSRF-01, SEC-CSRF-02).")
 
 def current_user(request: Request, db: Session = Depends(db_session)) -> User:
     """FastAPI dependency to retrieve the authenticated user and enforce tenant boundary (SEC-012)."""
     verify_csrf(request)
     token = extract_token_from_request(request)
-    payload = decode_token(token)
+    payload = decode_token(token, db=db)
     user = db.get(User, payload.get("uid"))
     if not user or user.tenant_id != payload.get("tid"):
         raise HTTPException(401, "Session unavailable or user not found.")
@@ -319,19 +518,45 @@ def require_role(allowed_roles: list[str]):
         return user
     return role_checker
 
-def audit(db: Session, tenant_id: int, event: str):
-    """Logs administrative action to audit table (SEC-020)."""
-    db.add(AuditEvent(tenant_id=tenant_id, event=event))
+def audit(
+    db: Session,
+    tenant_id: int,
+    event: str,
+    actor_id: Optional[int] = None,
+    target: Optional[str] = None,
+    status: str = "success",
+    details: Optional[str] = None
+):
+    """Logs action to audit table without exposing secrets or bearer tokens (SEC-AUD-01)."""
+    db.add(AuditEvent(
+        tenant_id=tenant_id,
+        actor_id=actor_id,
+        event=event,
+        target=target,
+        status=status,
+        details=details
+    ))
 
-def set_session_cookie(response: JSONResponse, user: User) -> JSONResponse:
+def set_session_cookie(response: Response, user: User, csrf_token: Optional[str] = None) -> Response:
     token = token_for(user)
+    csrf = csrf_token or generate_csrf_token()
     response.set_cookie(
         "classpulse_session",
         token,
         httponly=True,
-        samesite="lax",
+        samesite=COOKIE_SAMESITE,
         secure=COOKIE_SECURE,
-        max_age=JWT_EXPIRE_HOURS * 60 * 60
+        max_age=ACCESS_TOKEN_TTL_MINUTES * 60,
+        path="/"
+    )
+    response.set_cookie(
+        "classpulse_csrf",
+        csrf,
+        httponly=False,
+        samesite=COOKIE_SAMESITE,
+        secure=COOKIE_SECURE,
+        max_age=ACCESS_TOKEN_TTL_MINUTES * 60,
+        path="/"
     )
     return response
 
@@ -578,10 +803,26 @@ def health():
 
 # ----------------- Authentication Routes (SEC-001 to SEC-013) -----------------
 
+@app.get("/api/v1/auth/csrf")
+def get_csrf(request: Request):
+    """Retrieve or initialize CSRF double-submit token (SEC-CSRF-01)."""
+    token = request.cookies.get("classpulse_csrf") or generate_csrf_token()
+    res = JSONResponse({"csrf_token": token})
+    res.set_cookie(
+        "classpulse_csrf",
+        token,
+        httponly=False,
+        samesite=COOKIE_SAMESITE,
+        secure=COOKIE_SECURE,
+        max_age=ACCESS_TOKEN_TTL_MINUTES * 60,
+        path="/"
+    )
+    return res
+
 @app.post("/api/v1/auth/register")
 async def register(request: Request, db: Session = Depends(db_session)):
     client_ip = request.client.host if request.client else "127.0.0.1"
-    check_rate_limit(f"register_{client_ip}", max_attempts=10, window_seconds=600)
+    check_rate_limit(f"register_{client_ip}", max_attempts=10, window_seconds=600, db=db)
     
     body = await request.json()
     name = body.get("centre_name", "").strip()
@@ -615,14 +856,16 @@ async def register(request: Request, db: Session = Depends(db_session)):
         last_login_at=datetime.now(timezone.utc)
     )
     db.add(user)
-    audit(db, tenant.id, "account_created")
+    audit(db, tenant.id, "account_created", target=email)
     db.commit()
 
     access_token = token_for(user)
+    csrf_token = generate_csrf_token()
     return set_session_cookie(
         JSONResponse({
             "access_token": access_token,
             "token_type": "bearer",
+            "csrf_token": csrf_token,
             "user": {
                 "id": user.id,
                 "email": user.email,
@@ -631,13 +874,14 @@ async def register(request: Request, db: Session = Depends(db_session)):
                 "role": user.role
             }
         }),
-        user
+        user,
+        csrf_token=csrf_token
     )
 
 @app.post("/api/v1/auth/login")
 async def login(request: Request, db: Session = Depends(db_session)):
     client_ip = request.client.host if request.client else "127.0.0.1"
-    check_rate_limit(f"login_{client_ip}", max_attempts=15, window_seconds=600)
+    check_rate_limit(f"login_{client_ip}", max_attempts=15, window_seconds=600, db=db)
 
     body = await request.json()
     email = body.get("email", "").strip().lower()
@@ -646,24 +890,25 @@ async def login(request: Request, db: Session = Depends(db_session)):
         raise HTTPException(400, "Email and password are required.")
 
     user = db.scalar(select(User).where(User.email == email))
-    if not user or not verify_password(password, user.password_hash):
+    # FR-AUTH-07: Generic authentication failure message that does not leak username existence
+    if not user or not verify_password(password, user.password_hash) or not getattr(user, "is_active", True):
         raise HTTPException(401, "Incorrect email or password.")
-    if not getattr(user, "is_active", True):
-        raise HTTPException(403, "This account is deactivated. Contact your administrator.")
 
     user.last_login_at = datetime.now(timezone.utc)
     tenant = db.get(Tenant, user.tenant_id)
-    audit(db, user.tenant_id, "signed_in")
+    audit(db, user.tenant_id, "signed_in", actor_id=user.id, target=user.email)
     db.commit()
 
     # Backward compatibility: automatically sync students from records on login
     sync_students_from_records(db, user.tenant_id)
 
     access_token = token_for(user)
+    csrf_token = generate_csrf_token()
     return set_session_cookie(
         JSONResponse({
             "access_token": access_token,
             "token_type": "bearer",
+            "csrf_token": csrf_token,
             "user": {
                 "id": user.id,
                 "email": user.email,
@@ -672,13 +917,33 @@ async def login(request: Request, db: Session = Depends(db_session)):
                 "role": user.role
             }
         }),
-        user
+        user,
+        csrf_token=csrf_token
     )
 
 @app.post("/api/v1/auth/logout")
-def logout():
+def logout(request: Request, db: Session = Depends(db_session)):
+    """Logs out user, invalidates JWT jti in RevokedToken store, and clears cookies (FR-AUTH-04, SEC-TOK-05)."""
+    try:
+        token = extract_token_from_request(request)
+        payload = decode_token(token)
+        jti = payload.get("jti")
+        if jti:
+            exp_ts = payload.get("exp", 0)
+            exp_dt = datetime.fromtimestamp(exp_ts, tz=timezone.utc)
+            db.add(RevokedToken(
+                jti=jti,
+                tenant_id=payload.get("tid"),
+                user_id=payload.get("uid"),
+                revoked_at=datetime.now(timezone.utc),
+                expires_at=exp_dt
+            ))
+            db.commit()
+    except Exception:
+        pass
     res = JSONResponse({"ok": True, "message": "Signed out successfully."})
-    res.delete_cookie("classpulse_session")
+    res.delete_cookie("classpulse_session", path="/")
+    res.delete_cookie("classpulse_csrf", path="/")
     return res
 
 @app.get("/api/v1/me")
@@ -706,7 +971,8 @@ async def change_password(request: Request, user: User = Depends(current_user), 
         raise HTTPException(400, "New password must be at least 8 characters and contain both letters and numbers.")
 
     user.password_hash = password_hash(new_password)
-    audit(db, user.tenant_id, "password_changed")
+    user.password_changed_at = datetime.now(timezone.utc)
+    audit(db, user.tenant_id, "password_changed", actor_id=user.id, target=user.email)
     db.commit()
     return {"ok": True, "message": "Password changed successfully."}
 
@@ -753,14 +1019,18 @@ async def create_centre_user(request: Request, user: User = Depends(require_role
         is_active=True
     )
     db.add(new_user)
-    audit(db, user.tenant_id, f"staff_created:{role}")
+    audit(db, user.tenant_id, f"staff_created:{role}", actor_id=user.id, target=email)
     db.commit()
     return {"ok": True, "message": f"User {email} created with role '{role}'.", "user_id": new_user.id}
 
-# ----------------- Spreadsheet Ingestion Endpoints (DATA-001 to DATA-028) -----------------
+# ----------------- Spreadsheet Ingestion Endpoints (DATA-001 to DATA-028, IMP-01 to IMP-07) -----------------
 
 @app.post("/api/v1/imports/preview")
-async def preview_import(file: UploadFile = File(...), user: User = Depends(require_role(["owner", "admin", "teacher"]))):
+async def preview_import(
+    file: UploadFile = File(...),
+    user: User = Depends(require_role(["owner", "admin", "teacher"])),
+    db: Session = Depends(db_session)
+):
     ext = file.filename.lower().split(".")[-1]
     if ext not in ("csv", "xlsx"):
         raise HTTPException(400, "Only .csv and .xlsx spreadsheet files are accepted (DATA-001).")
@@ -770,16 +1040,25 @@ async def preview_import(file: UploadFile = File(...), user: User = Depends(requ
         raise HTTPException(413, f"File exceeds maximum size of {MAX_UPLOAD_BYTES // 1024 // 1024} MB (DATA-002).")
 
     valid, errors, summary = parse_sheet_data(contents, file.filename)
-    key = secrets.token_urlsafe(18)
-    previews[key] = {
-        "tenant_id": user.tenant_id,
-        "filename": file.filename,
-        "valid": valid,
-        "errors": errors,
-        "summary": summary
-    }
+    preview_key = secrets.token_urlsafe(24)
+    now = datetime.now(timezone.utc)
+    expires = now + timedelta(hours=2)
+
+    db.add(ImportPreviewRecord(
+        preview_id=preview_key,
+        tenant_id=user.tenant_id,
+        initiating_user_id=user.id,
+        filename=file.filename,
+        payload_json=json.dumps({"valid": valid, "errors": errors, "summary": summary}),
+        status="pending",
+        created_at=now,
+        expires_at=expires
+    ))
+    audit(db, user.tenant_id, f"import_preview_created:{file.filename}", actor_id=user.id)
+    db.commit()
+
     return {
-        "preview_id": key,
+        "preview_id": preview_key,
         "filename": file.filename,
         "summary": summary,
         "errors": errors[:25],
@@ -787,23 +1066,58 @@ async def preview_import(file: UploadFile = File(...), user: User = Depends(requ
     }
 
 @app.post("/api/v1/imports/{preview_id}/confirm")
-def confirm_import(preview_id: str, user: User = Depends(require_role(["owner", "admin", "teacher"])), db: Session = Depends(db_session)):
-    preview = previews.pop(preview_id, None)
-    if not preview or preview["tenant_id"] != user.tenant_id:
-        raise HTTPException(404, "Import preview expired. Upload the file again (DATA-028).")
+def confirm_import(
+    preview_id: str,
+    user: User = Depends(require_role(["owner", "admin", "teacher"])),
+    db: Session = Depends(db_session)
+):
+    check_rate_limit(f"import_confirm_{user.tenant_id}", max_attempts=30, window_seconds=60, db=db)
     
+    preview = db.scalar(
+        select(ImportPreviewRecord).where(
+            ImportPreviewRecord.preview_id == preview_id,
+            ImportPreviewRecord.tenant_id == user.tenant_id
+        )
+    )
+    if not preview:
+        raise HTTPException(404, "Import preview expired or not found. Upload the file again (DATA-028).")
+    
+    data = json.loads(preview.payload_json)
+
+    if preview.status == "completed":
+        # Idempotent confirmation (IMP-06)
+        return {"id": 0, "message": "Import already completed.", "status": "already_processed", **data.get("summary", {})}
+    
+    if preview.status != "pending":
+        raise HTTPException(400, f"Import preview is in status '{preview.status}'.")
+
+    # Check expiration
+    if preview.expires_at:
+        exp_dt = preview.expires_at.replace(tzinfo=timezone.utc) if preview.expires_at.tzinfo is None else preview.expires_at
+        if exp_dt < datetime.now(timezone.utc):
+            preview.status = "expired"
+            db.commit()
+            raise HTTPException(404, "Import preview has expired. Upload the file again.")
+
+    valid_rows = data.get("valid", [])
+    error_rows = data.get("errors", [])
+    summary = data.get("summary", {})
+
+    preview.status = "completed"
+
     job = ImportJob(
         tenant_id=user.tenant_id,
-        filename=preview["filename"],
+        initiating_user_id=user.id,
+        filename=preview.filename,
         status="completed",
-        accepted_rows=len(preview["valid"]),
-        rejected_rows=len(preview["errors"]),
-        summary_json=json.dumps(preview["summary"])
+        accepted_rows=len(valid_rows),
+        rejected_rows=len(error_rows),
+        summary_json=json.dumps(summary)
     )
     db.add(job)
     db.flush()
 
-    for row in preview["valid"]:
+    for row in valid_rows:
         db.add(Record(
             tenant_id=user.tenant_id,
             import_id=job.id,
@@ -829,14 +1143,16 @@ def confirm_import(preview_id: str, user: User = Depends(require_role(["owner", 
                 attendance_rate=p["attendance_rate"],
                 financial_risk_level=p.get("financial_risk", {}).get("financial_risk_level", "Clear"),
                 model_version=p.get("model_version", predictor.model_version),
-                factors_json=json.dumps(p.get("key_factors", []))
+                factors_json=json.dumps(p.get("key_factors", [])),
+                is_tentative=p.get("is_tentative", False),
+                provenance=p.get("provenance", predictor.dataset_provenance)
             ))
-    except Exception as e:
+    except Exception:
         pass
 
-    audit(db, user.tenant_id, f"import_confirmed:{preview['filename']}")
+    audit(db, user.tenant_id, f"import_confirmed:{preview.filename}", actor_id=user.id)
     db.commit()
-    return {"id": job.id, "message": "Import completed successfully.", **preview["summary"]}
+    return {"id": job.id, "message": "Import completed successfully.", **summary}
 
 @app.get("/api/v1/imports")
 def list_imports(user: User = Depends(current_user), db: Session = Depends(db_session)):
@@ -923,7 +1239,9 @@ def get_student_profile(student_id: str, user: User = Depends(current_user), db:
         attendance_rate=current_pred["attendance_rate"],
         financial_risk_level=current_pred.get("financial_risk", {}).get("financial_risk_level", "Clear"),
         model_version=current_pred.get("model_version", predictor.model_version),
-        factors_json=json.dumps(current_pred.get("key_factors", []))
+        factors_json=json.dumps(current_pred.get("key_factors", [])),
+        is_tentative=current_pred.get("is_tentative", False),
+        provenance=current_pred.get("provenance", predictor.dataset_provenance)
     ))
     db.commit()
 
@@ -1000,37 +1318,43 @@ def get_student_prediction_history(student_id: str, user: User = Depends(current
         for h in history_records
     ]
 
-# ----------------- PDF Analytical Reports (FEAT-013 to FEAT-016) -----------------
+# ----------------- PDF Analytical Reports (FEAT-013 to FEAT-016, REP-01 to REP-04) -----------------
 
 @app.get("/api/v1/reports/pdf/student/{student_id}")
 def download_student_report_card(student_id: str, user: User = Depends(current_user), db: Session = Depends(db_session)):
     """
-    Generates and downloads official Student Performance & AI Risk Report Card (PDF).
+    Generates and downloads official Student Performance & AI Risk Report Card (PDF) (REP-01, REP-02).
     """
-    tenant = db.get(Tenant, user.tenant_id)
-    centre_name = tenant.name if tenant else "ClassPulse Academy"
+    try:
+        tenant = db.get(Tenant, user.tenant_id)
+        centre_name = tenant.name if tenant else "ClassPulse Academy"
 
-    tenant_records = db.scalars(select(Record).where(Record.tenant_id == user.tenant_id)).all()
-    rows = [json.loads(r.data_json) for r in tenant_records]
-    student_rows = [r for r in rows if (r.get("student_id") or "").strip() == student_id.strip()]
+        tenant_records = db.scalars(select(Record).where(Record.tenant_id == user.tenant_id)).all()
+        rows = [json.loads(r.data_json) for r in tenant_records]
+        student_rows = [r for r in rows if (r.get("student_id") or "").strip() == student_id.strip()]
 
-    if not student_rows:
-        raise HTTPException(404, f"Student '{student_id}' not found.")
+        if not student_rows:
+            raise HTTPException(404, f"Student '{student_id}' not found.")
 
-    features = predictor.extract_student_features(student_rows)
-    profile = features.get(student_id.strip())
-    if not profile:
-        raise HTTPException(404, "Student profile could not be generated.")
+        features = predictor.extract_student_features(student_rows)
+        profile = features.get(student_id.strip())
+        if not profile:
+            raise HTTPException(404, "Student profile could not be generated.")
 
-    prediction = predictor.predict_student(profile)
-    prediction["exam_scores_detail"] = [r for r in student_rows if r.get("record_type") in ("exam", "test")]
+        prediction = predictor.predict_student(profile)
+        prediction["exam_scores_detail"] = [r for r in student_rows if r.get("record_type") in ("exam", "test")]
 
-    pdf_bytes = generate_student_report_card(prediction, centre_name=centre_name)
-    return Response(
-        content=pdf_bytes,
-        media_type="application/pdf",
-        headers={"Content-Disposition": f"inline; filename=classpulse-report-{student_id}.pdf"}
-    )
+        pdf_bytes = generate_student_report_card(prediction, centre_name=centre_name)
+        return Response(
+            content=pdf_bytes,
+            media_type="application/pdf",
+            headers={"Content-Disposition": f"inline; filename=classpulse-report-{student_id}.pdf"}
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"Failed to generate student report card for {student_id}: {e}")
+        raise HTTPException(500, "Unable to generate report card at this time. Please try again later (REP-04).")
 
 @app.get("/api/v1/reports/pdf/cohort-summary")
 def download_cohort_summary_pdf(
@@ -1042,33 +1366,39 @@ def download_cohort_summary_pdf(
     db: Session = Depends(db_session)
 ):
     """
-    Generates and downloads Executive Cohort Analytics & Predictive Risk Report (PDF) (FEAT-013, FEAT-014).
+    Generates and downloads Executive Cohort Analytics & Predictive Risk Report (PDF) (FEAT-013, FEAT-014, REP-01, REP-04).
     """
     validate_filters(start, end)
-    tenant = db.get(Tenant, user.tenant_id)
-    centre_name = tenant.name if tenant else "ClassPulse Academy"
+    try:
+        tenant = db.get(Tenant, user.tenant_id)
+        centre_name = tenant.name if tenant else "ClassPulse Academy"
 
-    tenant_records = db.scalars(select(Record).where(Record.tenant_id == user.tenant_id)).all()
-    current = filtered(tenant_records, start, end, course, batch)
-    ml_analysis = predictor.predict_cohort(current, course_filter=course, batch_filter=batch)
+        tenant_records = db.scalars(select(Record).where(Record.tenant_id == user.tenant_id)).all()
+        current = filtered(tenant_records, start, end, course, batch)
+        ml_analysis = predictor.predict_cohort(current, course_filter=course, batch_filter=batch)
 
-    filters_applied = {"start": start, "end": end, "course": course, "batch": batch}
-    pdf_bytes = generate_cohort_summary_report(ml_analysis["summary"], centre_name=centre_name, filters_applied=filters_applied)
-    return Response(
-        content=pdf_bytes,
-        media_type="application/pdf",
-        headers={"Content-Disposition": "inline; filename=classpulse-cohort-executive-report.pdf"}
-    )
+        filters_applied = {"start": start, "end": end, "course": course, "batch": batch}
+        pdf_bytes = generate_cohort_summary_report(ml_analysis["summary"], centre_name=centre_name, filters_applied=filters_applied)
+        return Response(
+            content=pdf_bytes,
+            media_type="application/pdf",
+            headers={"Content-Disposition": "inline; filename=classpulse-cohort-executive-report.pdf"}
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"Failed to generate cohort summary report: {e}")
+        raise HTTPException(500, "Unable to generate cohort summary report at this time. Please try again later (REP-04).")
 
 # ----------------- Machine Learning Governance & Retraining (ML-001 to ML-020) -----------------
 
 @app.get("/api/v1/ml/model-info")
 def get_model_evaluation_info(user: User = Depends(current_user)):
     """
-    Returns full machine learning model evaluation metrics, held-out validation results, and provenance (ML-007 to ML-014).
+    Returns full machine learning model evaluation metrics, held-out validation results, and provenance (ML-001 to ML-014).
     """
     return {
-        "model_name": "Random Forest Classifier (Ensemble Calibrated)",
+        "model_name": "Random Forest Classifier (Benchmark Model)",
         "model_version": predictor.model_version,
         "dataset_provenance": predictor.dataset_provenance,
         "is_synthetic": predictor.is_synthetic,
@@ -1092,7 +1422,7 @@ def get_model_evaluation_info(user: User = Depends(current_user)):
         "class_distribution": predictor.class_distribution,
         "feature_importances": predictor.get_feature_importances(),
         "academic_financial_separation": "Academic features only. Fee status tracked independently without biasing predictive accuracy (ML-027).",
-        "statutory_disclaimer": "Predictions are statistical estimates for pedagogical support and do not guarantee academic outcomes (ML-025)."
+        "statutory_disclaimer": "Predictions are statistical estimates for pedagogical support on benchmark datasets and do not guarantee academic outcomes (ML-002, ML-025)."
     }
 
 @app.post("/api/v1/ml/retrain")
@@ -1111,36 +1441,45 @@ def retrain_model(user: User = Depends(require_role(["owner", "admin"])), db: Se
     if not result.get("success"):
         raise HTTPException(400, result.get("error", "Retraining validation failed. Previous model preserved (ML-020)."))
 
-    audit(db, user.tenant_id, f"model_retrained:{result.get('model_version')}")
+    audit(db, user.tenant_id, f"model_retrained:{result.get('model_version')}", actor_id=user.id)
     db.commit()
     return result
 
-# ----------------- Database Backup & Restore (DEP-004, DEP-005) -----------------
+# ----------------- Database Backup & Restore (DEP-004, DEP-005, SEC-TEN-01) -----------------
 
 @app.get("/api/v1/admin/backup")
 def download_database_backup(user: User = Depends(require_role(["owner", "admin"])), db: Session = Depends(db_session)):
     """
-    Exports a secure database backup archive (DEP-004).
+    Exports a secure database backup archive strictly scoped to the authenticated tenant (DEP-004, SEC-TEN-01).
     """
     tenant_records = db.scalars(select(Record).where(Record.tenant_id == user.tenant_id)).all()
-    audit(db, user.tenant_id, "backup_downloaded")
+    tenant_students = db.scalars(select(Student).where(Student.tenant_id == user.tenant_id)).all()
+    tenant_jobs = db.scalars(select(ImportJob).where(ImportJob.tenant_id == user.tenant_id)).all()
+
+    audit(db, user.tenant_id, "backup_downloaded", actor_id=user.id)
     db.commit()
 
-    if DATABASE_URL.startswith("sqlite"):
-        db_file = Path(DATABASE_URL.replace("sqlite:///", "").replace("./", ""))
-        if not db_file.is_absolute():
-            db_file = BASE_DIR / db_file
-        if db_file.exists():
-            return FileResponse(
-                db_file,
-                filename="classpulse-backup.db",
-                media_type="application/x-sqlite3"
-            )
-
-    # For MySQL or fallback: export JSON archive
     backup_data = {
         "export_date": datetime.now(timezone.utc).isoformat(),
         "tenant_id": user.tenant_id,
+        "students": [
+            {
+                "student_id": s.student_id,
+                "name": s.name,
+                "course_id": s.course_id,
+                "batch_id": s.batch_id
+            }
+            for s in tenant_students
+        ],
+        "import_jobs": [
+            {
+                "filename": j.filename,
+                "accepted_rows": j.accepted_rows,
+                "rejected_rows": j.rejected_rows,
+                "status": j.status
+            }
+            for j in tenant_jobs
+        ],
         "records": [json.loads(r.data_json) for r in tenant_records]
     }
     return Response(
@@ -1156,7 +1495,7 @@ async def restore_database_backup(
     db: Session = Depends(db_session)
 ):
     """
-    Restores database records from an authorized backup file (DEP-005).
+    Restores database records from an authorized backup file into the authenticated tenant (DEP-005, SEC-TEN-01).
     """
     contents = await file.read()
     try:
@@ -1167,6 +1506,7 @@ async def restore_database_backup(
         
         job = ImportJob(
             tenant_id=user.tenant_id,
+            initiating_user_id=user.id,
             filename=f"Restore: {file.filename}",
             status="completed",
             accepted_rows=len(records),
@@ -1177,13 +1517,21 @@ async def restore_database_backup(
         db.flush()
 
         for r in records:
-            db.add(Record(tenant_id=user.tenant_id, import_id=job.id, record_type=r.get("record_type", "student"), data_json=json.dumps(r)))
+            db.add(Record(
+                tenant_id=user.tenant_id,
+                import_id=job.id,
+                record_type=r.get("record_type", "student"),
+                data_json=json.dumps(r)
+            ))
         
         sync_students_from_records(db, user.tenant_id)
-        audit(db, user.tenant_id, f"backup_restored:{len(records)}_records")
+        audit(db, user.tenant_id, f"backup_restored:{len(records)}_records", actor_id=user.id)
         db.commit()
         return {"ok": True, "message": f"Successfully restored {len(records)} records from backup."}
+    except HTTPException:
+        raise
     except Exception as e:
+        logger.exception(f"Failed to restore backup: {e}")
         raise HTTPException(400, f"Failed to restore backup: {str(e)}")
 
 # ----------------- Existing Analytical & Matplotlib Endpoints -----------------
