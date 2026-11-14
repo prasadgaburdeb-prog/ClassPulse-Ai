@@ -342,26 +342,41 @@ class UniversalSheetAdapter:
             # Fee status (tracked independently per ML-027, ML-030)
             fee_ratio = 1.0
             outstanding_fees = 0.0
+            total_fee = 0.0
+            paid_fee = 0.0
+            has_fee_records = False
 
-            if "fee_status" in mapping:
-                st = str(row.get(mapping["fee_status"], "")).strip().lower()
-                if any(w in st for w in ["paid", "clear", "done", "yes", "success", "full"]):
-                    fee_ratio = 1.0
-                    outstanding_fees = 0.0
-                elif any(w in st for w in ["pending", "due", "unpaid", "partial", "no"]):
-                    fee_ratio = 0.5
-                    outstanding_fees = 5000.0
-            elif "fee_paid" in mapping and "fee_total" in mapping:
-                p = clean_num(row.get(mapping["fee_paid"])) or 0.0
-                tot = clean_num(row.get(mapping["fee_total"])) or 0.0
-                if tot > 0:
-                    fee_ratio = min(1.0, max(0.0, p / tot))
-                    outstanding_fees = max(0.0, tot - p)
-            elif "fee_due" in mapping:
-                due = clean_num(row.get(mapping["fee_due"])) or 0.0
-                if due > 0:
-                    outstanding_fees = due
-                    fee_ratio = 0.6
+            if "fee_total" in mapping or "fee_paid" in mapping or "fee_due" in mapping or "fee_status" in mapping:
+                has_fee_records = True
+                if "fee_paid" in mapping and "fee_total" in mapping:
+                    p = clean_num(row.get(mapping["fee_paid"])) or 0.0
+                    tot = clean_num(row.get(mapping["fee_total"])) or 0.0
+                    total_fee = tot
+                    paid_fee = p
+                    if tot > 0:
+                        fee_ratio = min(1.0, max(0.0, p / tot))
+                        outstanding_fees = max(0.0, tot - p)
+                    else:
+                        fee_ratio = 1.0
+                        outstanding_fees = 0.0
+                elif "fee_due" in mapping:
+                    due = clean_num(row.get(mapping["fee_due"])) or 0.0
+                    outstanding_fees = max(0.0, due)
+                    total_fee = outstanding_fees
+                    if "fee_paid" in mapping:
+                        paid_fee = clean_num(row.get(mapping["fee_paid"])) or 0.0
+                        total_fee = paid_fee + outstanding_fees
+                        fee_ratio = min(1.0, max(0.0, paid_fee / total_fee)) if total_fee > 0 else 1.0
+                    else:
+                        fee_ratio = 0.0 if outstanding_fees > 0 else 1.0
+                elif "fee_status" in mapping:
+                    st = str(row.get(mapping["fee_status"], "")).strip().lower()
+                    if any(w in st for w in ["paid", "clear", "done", "yes", "success", "full"]):
+                        fee_ratio = 1.0
+                        outstanding_fees = 0.0
+                    elif any(w in st for w in ["pending", "due", "unpaid", "partial", "no"]):
+                        fee_ratio = 0.5
+                        outstanding_fees = 0.0  # DATA-07, DATA-09: Do not fabricate fixed fees
 
             profiles.append({
                 "student_id": sid_display,
@@ -371,9 +386,11 @@ class UniversalSheetAdapter:
                 "present_count": classes_attended,
                 "total_sessions": total_classes,
                 "has_attendance_records": has_attendance,
+                "has_fee_records": has_fee_records,
                 "fee_clearance_ratio": fee_ratio,
                 "outstanding_fees": outstanding_fees,
-                "total_obligations": 20000.0 if outstanding_fees > 0 else 0.0,
+                "total_obligations": total_fee,
+                "total_paid": paid_fee,
                 "avg_mock_score": exam_score,
                 "has_mock_records": has_mock,
                 "actual_outcome": actual_outcome,
@@ -389,6 +406,8 @@ class UniversalSheetAdapter:
         """
         Converts generic flat spreadsheet rows into standard ClassPulse database records
         so that ANY spreadsheet can be imported directly into the database.
+        Strictly preserves factual integrity (IMP-04, DATA-07, DATA-09):
+        does not fabricate fictional fees or attendance sessions if they were not in the source file.
         """
         profiles, mapping, _, _ = UniversalSheetAdapter.convert_flat_rows_to_profiles(rows)
         today = datetime.date.today().isoformat()
@@ -412,54 +431,69 @@ class UniversalSheetAdapter:
                 "refund_amount": "0"
             })
 
-            # 2. Obligation & payment record (if fee info present)
-            total_fee = 20000.0
-            fee_ratio = p.get("fee_clearance_ratio", 1.0)
-            paid_fee = total_fee * fee_ratio
+            # 2. Obligation & payment record (ONLY if actual fee info was provided!)
+            if p.get("has_fee_records") and p.get("total_obligations", 0) > 0:
+                tot_fee = p["total_obligations"]
+                paid_fee = p.get("total_paid", 0.0)
+                if paid_fee == 0.0 and p.get("fee_clearance_ratio", 1.0) > 0:
+                    paid_fee = tot_fee * p["fee_clearance_ratio"]
 
-            records.append({
-                "record_type": "obligation",
-                "id": f"OBL-{idx:04d}",
-                "date": today,
-                "course_id": cid,
-                "batch_id": bid,
-                "student_id": sid,
-                "amount": str(int(total_fee)),
-                "status": "due",
-                "refund_amount": "0"
-            })
-            if paid_fee > 0:
                 records.append({
-                    "record_type": "payment",
-                    "id": f"PAY-{idx:04d}",
+                    "record_type": "obligation",
+                    "id": f"OBL-{idx:04d}",
                     "date": today,
                     "course_id": cid,
                     "batch_id": bid,
                     "student_id": sid,
-                    "amount": str(int(paid_fee)),
-                    "status": "successful",
+                    "amount": str(int(tot_fee)),
+                    "status": "due",
                     "refund_amount": "0"
                 })
+                if paid_fee > 0:
+                    records.append({
+                        "record_type": "payment",
+                        "id": f"PAY-{idx:04d}",
+                        "date": today,
+                        "course_id": cid,
+                        "batch_id": bid,
+                        "student_id": sid,
+                        "amount": str(int(paid_fee)),
+                        "status": "successful",
+                        "refund_amount": "0"
+                    })
 
-            # 3. Attendance records (create sample present/absent logs based on rate)
-            att_rate = p.get("attendance_rate", 75.0)
-            num_sessions = 10
-            presents = int(round(att_rate / 100.0 * num_sessions))
-            for s_i in range(num_sessions):
-                st = "present" if s_i < presents else "absent"
-                records.append({
-                    "record_type": "attendance",
-                    "id": f"ATT-{idx:04d}-{s_i+1:02d}",
-                    "date": today,
-                    "course_id": cid,
-                    "batch_id": bid,
-                    "student_id": sid,
-                    "amount": "0",
-                    "status": st,
-                    "refund_amount": "0"
-                })
+            # 3. Attendance records (ONLY if attendance data was actually logged!)
+            if p.get("has_attendance_records"):
+                num_sessions = p.get("total_sessions", 0)
+                presents = p.get("present_count", 0)
+                if num_sessions > 0:
+                    for s_i in range(num_sessions):
+                        st = "present" if s_i < presents else "absent"
+                        records.append({
+                            "record_type": "attendance",
+                            "id": f"ATT-{idx:04d}-{s_i+1:02d}",
+                            "date": today,
+                            "course_id": cid,
+                            "batch_id": bid,
+                            "student_id": sid,
+                            "amount": "0",
+                            "status": st,
+                            "refund_amount": "0"
+                        })
+                elif p.get("attendance_rate") is not None:
+                    records.append({
+                        "record_type": "attendance",
+                        "id": f"ATT-{idx:04d}",
+                        "date": today,
+                        "course_id": cid,
+                        "batch_id": bid,
+                        "student_id": sid,
+                        "amount": str(p["attendance_rate"]),
+                        "status": "present",
+                        "refund_amount": "0"
+                    })
 
-            # 4. Exam record (only if mock score was actually present!)
+            # 4. Exam record (ONLY if mock score was actually present!)
             if p.get("has_mock_records") and p.get("avg_mock_score") is not None:
                 score = p["avg_mock_score"]
                 records.append({
@@ -978,6 +1012,8 @@ class StudentExamPredictor:
             "has_mock_records": has_mock,
             "data_status": data_status,
             "is_incomplete": len(missing_inputs) > 0,
+            "is_tentative": len(missing_inputs) > 0,
+            "provenance": self.dataset_provenance,
             "missing_inputs": missing_inputs,
             "pass_probability": pass_prob,
             "predicted_outcome": predicted_outcome,

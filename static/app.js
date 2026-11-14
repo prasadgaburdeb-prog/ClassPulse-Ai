@@ -4,8 +4,26 @@ let studentPage = 1, studentPageLimit = 15;
 
 const money = n => n == null ? 'Unavailable' : new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(n);
 
+function getCookie(name) {
+  let v = document.cookie.match('(^|;) ?' + name + '=([^;]*)(;|$)');
+  return v ? decodeURIComponent(v[2]) : null;
+}
+
+function getCsrfToken() {
+  return getCookie('classpulse_csrf') || '';
+}
+
 async function api(path, options = {}) {
-  let r = await fetch(path, { headers: { 'Content-Type': 'application/json' }, ...options });
+  let headers = { ...options.headers };
+  if (!headers['Content-Type'] && !(options.body instanceof FormData)) {
+    headers['Content-Type'] = 'application/json';
+  }
+  let csrf = getCsrfToken();
+  if (csrf) {
+    headers['X-CSRF-Token'] = csrf;
+    headers['X-Requested-With'] = 'XMLHttpRequest';
+  }
+  let r = await fetch(path, { ...options, headers });
   let d = r.headers.get('content-type')?.includes('json') ? await r.json() : await r.text();
   if (!r.ok) throw new Error(d.detail || 'Something went wrong.');
   return d;
@@ -1115,9 +1133,7 @@ async function analyzeDirectSheet() {
   $('#directSheetStatus').innerHTML = '<p class="small" style="color:#0277bd;">Analyzing columns and computing ML predictions...</p>';
 
   try {
-    let r = await fetch('/api/v1/ml/analyze-sheet', { method: 'POST', body: fd });
-    let d = await r.json();
-    if (!r.ok) throw new Error(d.detail);
+    let d = await api('/api/v1/ml/analyze-sheet', { method: 'POST', body: fd });
 
     let mapText = Object.entries(d.detected_columns).map(([k, v]) => `<strong>${k}</strong> &rarr; <em>"${v}"</em>`).join(', ');
     $('#directSheetStatus').innerHTML = `
@@ -1134,11 +1150,8 @@ async function analyzeDirectSheet() {
     try {
       let fdCharts = new FormData();
       fdCharts.append('file', f);
-      let cr = await fetch('/api/v1/charts/generate-from-sheet', { method: 'POST', body: fdCharts });
-      if (cr.ok) {
-        let cd = await cr.json();
-        renderChartsBundle(cd, 'custom-sheet');
-      }
+      let cd = await api('/api/v1/charts/generate-from-sheet', { method: 'POST', body: fdCharts });
+      renderChartsBundle(cd, 'custom-sheet');
     } catch (chartErr) {
       console.warn('Could not render sheet charts:', chartErr);
     }
@@ -1209,9 +1222,7 @@ async function upload() {
   let fd = new FormData();
   fd.append('file', f);
   try {
-    let r = await fetch('/api/v1/imports/preview', { method: 'POST', body: fd });
-    let d = await r.json();
-    if (!r.ok) throw new Error(d.detail);
+    let d = await api('/api/v1/imports/preview', { method: 'POST', body: fd });
     preview = d.preview_id;
     $('#importResult').innerHTML = `
       <p class="notice">${d.summary.accepted_rows} valid rows, ${d.summary.rejected_rows} rejected rows, ${d.summary.duplicates} duplicate IDs detected.</p>

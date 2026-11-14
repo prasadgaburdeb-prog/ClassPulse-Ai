@@ -137,12 +137,14 @@ def generate_student_report_card(
     story.append(HRFlowable(width="100%", thickness=1.5, color=COLOR_PRIMARY, spaceBefore=0, spaceAfter=12))
 
     # 2. Student Information Table
-    sid = student_profile.get("student_id", "N/A")
-    cid = student_profile.get("course_id", "General")
-    bid = student_profile.get("batch_id", "Standard")
-    att_rate = student_profile.get("attendance_rate", 0.0)
-    att_present = student_profile.get("classes_attended", student_profile.get("present_count", 0))
-    att_total = student_profile.get("total_classes", student_profile.get("total_sessions", 40))
+    stu_obj = student_profile.get("student", {})
+    sid = student_profile.get("student_id") or stu_obj.get("student_id", "N/A")
+    cid = student_profile.get("course_id") or stu_obj.get("course_id", "General")
+    bid = student_profile.get("batch_id") or stu_obj.get("batch_id", "Standard")
+    att_summary = student_profile.get("attendance_summary", {})
+    att_rate = student_profile.get("attendance_rate", att_summary.get("attendance_rate", 0.0))
+    att_present = student_profile.get("classes_attended", student_profile.get("present_count", att_summary.get("present_count", 0)))
+    att_total = student_profile.get("total_classes", student_profile.get("total_sessions", att_summary.get("total_sessions", 40)))
 
     info_data = [
         [
@@ -169,14 +171,40 @@ def generate_student_report_card(
         ("RIGHTPADDING", (0, 0), (-1, -1), 8),
     ]))
     story.append(info_table)
-    story.append(Spacer(1, 12))
+    story.append(Spacer(1, 8))
+
+    # Model metadata provenance table (REP-01)
+    m_ver = student_profile.get("model_version", "v2.1.0-benchmark")
+    m_prov = student_profile.get("dataset_provenance") or student_profile.get("provenance", "synthetic_benchmark")
+    prov_label = "Synthetic Academic Benchmark" if "synthetic" in str(m_prov).lower() else "Verified Historical Outcomes"
+    model_meta = [
+        [
+            Paragraph("<b>Model Version:</b>", styles["TableCellBold"]),
+            Paragraph(str(m_ver), styles["TableCell"]),
+            Paragraph("<b>Model Provenance:</b>", styles["TableCellBold"]),
+            Paragraph(prov_label, styles["TableCell"])
+        ]
+    ]
+    meta_table = Table(model_meta, colWidths=[1.8 * inch, 1.8 * inch, 1.8 * inch, 1.8 * inch])
+    meta_table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), COLOR_LIGHT_BG),
+        ("BOX", (0, 0), (-1, -1), 0.5, COLOR_BORDER),
+        ("INNERGRID", (0, 0), (-1, -1), 0.5, COLOR_BORDER),
+        ("TOPPADDING", (0, 0), (-1, -1), 4),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ("LEFTPADDING", (0, 0), (-1, -1), 8),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 8),
+    ]))
+    story.append(meta_table)
+    story.append(Spacer(1, 10))
 
     # 3. AI Predictive Pass Assessment
     story.append(Paragraph("1. Machine Learning Academic Pass Prediction", styles["SectionHeading"]))
-    pass_prob = student_profile.get("pass_probability", 0.0)
-    risk_level = student_profile.get("risk_level", "Unknown")
-    predicted_outcome = student_profile.get("predicted_outcome", "Pending")
-    is_incomplete = student_profile.get("is_incomplete", False)
+    latest_pred = student_profile.get("latest_prediction", {})
+    pass_prob = student_profile.get("pass_probability", latest_pred.get("pass_probability", 0.0))
+    risk_level = student_profile.get("risk_level", latest_pred.get("risk_level", "Unknown"))
+    predicted_outcome = student_profile.get("predicted_outcome", latest_pred.get("predicted_outcome", "Pending"))
+    is_incomplete = student_profile.get("is_incomplete", student_profile.get("is_tentative", False))
 
     risk_color = COLOR_SUCCESS if pass_prob >= 75.0 else (COLOR_WARNING if pass_prob >= 50.0 else COLOR_DANGER)
 
@@ -207,7 +235,8 @@ def generate_student_report_card(
     story.append(Spacer(1, 10))
 
     # 4. Contributing Factors & Recommended Faculty Interventions
-    factors = student_profile.get("key_factors", [])
+    latest_pred = student_profile.get("latest_prediction", {})
+    factors = student_profile.get("key_factors") or latest_pred.get("factors", [])
     recs = student_profile.get("recommendations", [])
 
     callout_data = []
@@ -275,10 +304,10 @@ def generate_student_report_card(
 
     # 6. Financial Clearance Standing (Tracked Independently per ML-027, ML-030)
     story.append(Paragraph("3. Financial Standing (Administered Separately)", styles["SectionHeading"]))
-    fin = student_profile.get("financial_risk", {})
-    fee_pct = fin.get("fee_clearance_pct", student_profile.get("fee_clearance_pct", 100.0))
+    fin = student_profile.get("financial_standing") or student_profile.get("financial_risk", {})
+    fee_pct = fin.get("fee_clearance_pct", fin.get("clearance_pct", student_profile.get("fee_clearance_pct", 100.0)))
     fee_due = fin.get("outstanding_fees", student_profile.get("outstanding_fees", 0.0))
-    fin_status = fin.get("financial_status", "Paid in Full" if fee_due <= 0 else "Pending Dues")
+    fin_status = fin.get("financial_status", fin.get("fee_status", "Paid in Full" if fee_due <= 0 else "Pending Dues"))
 
     fin_data = [
         [
