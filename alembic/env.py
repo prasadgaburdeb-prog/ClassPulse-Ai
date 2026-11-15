@@ -21,7 +21,8 @@ from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BASE_DIR))
 
-from app.main import Base, DATABASE_URL
+from app.models import Base
+from app.database import DATABASE_URL
 
 target_metadata = Base.metadata
 
