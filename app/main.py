@@ -71,15 +71,26 @@ COMPROMISED_KEYS = {
 RAW_SECRET = os.getenv("JWT_SECRET_KEY") or os.getenv("SECRET_KEY")
 
 def validate_jwt_secret(secret_val: Optional[str], environment: str = "production") -> str:
-    """Validate JWT secret meets minimum security requirements (SEC-JWT-01, SEC-JWT-03, AT-JWT-01)."""
+    """Validate JWT secret meets minimum security requirements (SEC-JWT-01, SEC-JWT-03, AT-JWT-01, FR-JWT-01, FR-JWT-02, AT-08)."""
     val = (secret_val or "").strip()
     if environment == "production":
         if not val:
-            raise RuntimeError("FATAL (SEC-JWT-03): JWT_SECRET_KEY is empty or missing.")
+            raise RuntimeError("FATAL (FR-JWT-02): JWT_SECRET_KEY is empty or missing.")
         if val in COMPROMISED_KEYS:
-            raise RuntimeError("FATAL (SEC-JWT-03): JWT_SECRET_KEY is a known compromised key.")
+            raise RuntimeError("FATAL (FR-JWT-02): JWT_SECRET_KEY is a known compromised key.")
         if len(val) < 32:
-            raise RuntimeError("FATAL (SEC-JWT-03): JWT_SECRET_KEY must be at least 32 characters.")
+            raise RuntimeError("FATAL (FR-JWT-02): JWT_SECRET_KEY must be at least 32 characters.")
+        val_lower = val.lower()
+        placeholder_indicators = [
+            "classpulse-super-secure-production-jwt-key-2026-deb-prasad",
+            "replace-this", "replace_this", "replace-with", "replace_with",
+            "changeme", "change-me", "change_me", "placeholder", "your-secret",
+            "your_secret", "default-key"
+        ]
+        if any(p in val_lower for p in placeholder_indicators):
+            raise RuntimeError("FATAL (FR-JWT-02): JWT_SECRET_KEY is a known compromised key or insecure placeholder.")
+        if len(set(val)) < 8:
+            raise RuntimeError("FATAL (FR-JWT-02): JWT_SECRET_KEY has insufficient character variety or entropy for production.")
     return val
 
 if APP_ENV == "production":
@@ -97,6 +108,7 @@ JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
 JWT_ISSUER = os.getenv("JWT_ISSUER", "classpulse-ai")
 JWT_AUDIENCE = os.getenv("JWT_AUDIENCE", "classpulse-client")
 ACCESS_TOKEN_TTL_MINUTES = int(os.getenv("ACCESS_TOKEN_TTL_MINUTES", "30"))
+LEGACY_TOKEN_SUNSET_DATE = os.getenv("LEGACY_TOKEN_SUNSET_DATE", "2026-12-31T23:59:59Z")
 
 COOKIE_SECURE = os.getenv("COOKIE_SECURE", "false").lower() == "true"
 COOKIE_SAMESITE = os.getenv("COOKIE_SAMESITE", "lax").lower()
@@ -206,33 +218,63 @@ async def add_security_headers(request: Request, call_next):
 
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 
-# Shared sliding window rate limiter (SEC-008, SEC-RATE-01, FR-AUTH-06)
+# Shared sliding window rate limiter (SEC-008, SEC-RATE-01, FR-AUTH-06, FR-RL-01 to FR-RL-06)
 login_attempts: dict[str, list[float]] = {}
 
 def check_rate_limit(key: str, max_attempts: int = 15, window_seconds: int = 600, db: Optional[Session] = None):
+    """
+    Enforces atomic sliding-window rate limiting across multi-worker instances (FR-RL-01 to FR-RL-06).
+    In production (APP_ENV=production), failures of the shared store fail closed with a controlled 503 error.
+    In development/testing, process-local memory fallback is permitted with a clear warning (FR-RL-03).
+    """
     now = datetime.now(timezone.utc).timestamp()
     cutoff = now - window_seconds
+
+    # Privacy check (FR-RL-04): ensure sensitive credentials are not used as keys
+    safe_key = key
+    if len(safe_key) > 120:
+        safe_key = hashlib.sha256(key.encode("utf-8")).hexdigest()
+
     if db is not None:
         try:
-            db.execute(text("DELETE FROM rate_limits WHERE rate_key = :k AND attempt_timestamp < :c"), {"k": key, "c": cutoff})
-            count = db.scalar(text("SELECT count(*) FROM rate_limits WHERE rate_key = :k"), {"k": key}) or 0
-            if count >= max_attempts:
+            # Atomic check-and-insert (FR-RL-06)
+            db.execute(text("DELETE FROM rate_limits WHERE rate_key = :k AND attempt_timestamp < :c"), {"k": safe_key, "c": cutoff})
+            db.add(RateLimitRecord(rate_key=safe_key, attempt_timestamp=now))
+            db.flush()
+            
+            count = db.scalar(text("SELECT count(*) FROM rate_limits WHERE rate_key = :k AND attempt_timestamp >= :c"), {"k": safe_key, "c": cutoff}) or 0
+            if count > max_attempts:
+                db.commit()
                 wait_min = max(1, int(window_seconds // 60))
                 raise HTTPException(429, f"Too many requests. Please try again after {wait_min} minutes (SEC-RATE-01).")
-            db.add(RateLimitRecord(rate_key=key, attempt_timestamp=now))
             db.commit()
             return
         except HTTPException:
             raise
-        except Exception:
-            pass
+        except Exception as e:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            logger.error(f"SEC-RATE-01: Shared rate-limit database store failure: {e}")
+            if APP_ENV == "production":
+                # Fail closed in production (FR-RL-02, AT-01)
+                raise HTTPException(503, "Rate limiting service temporarily unavailable. Protected operation refused (FR-RL-02).")
+            # In development/test mode, fall through to in-memory fallback with explicit warning (FR-RL-03, AT-02)
+            logger.warning("SEC-RATE-02: Shared rate-limit store unavailable in development/test mode. Falling back to process-local memory tracker.")
+    else:
+        if APP_ENV == "production":
+            logger.error("SEC-RATE-01: No database session provided for rate limiting in production.")
+            raise HTTPException(503, "Rate limiting service temporarily unavailable. Protected operation refused (FR-RL-02).")
+        logger.warning("SEC-RATE-02: No shared database session provided; using process-local memory rate limiting (development mode).")
 
-    attempts = login_attempts.get(key, [])
+    # Process-local memory fallback (development/test mode only)
+    attempts = login_attempts.get(safe_key, [])
     attempts = [t for t in attempts if now - t < window_seconds]
-    login_attempts[key] = attempts
-    if len(attempts) >= max_attempts:
-        raise HTTPException(429, f"Too many failed attempts. Please try again after {int((window_seconds - (now - attempts[0])) // 60) + 1} minutes (SEC-008).")
     attempts.append(now)
+    login_attempts[safe_key] = attempts
+    if len(attempts) > max_attempts:
+        raise HTTPException(429, f"Too many failed attempts. Please try again after {int((window_seconds - (now - attempts[0])) // 60) + 1} minutes (SEC-008).")
 
 # ----------------- Security, Password & JWT Engine (SEC-001 to SEC-016) -----------------
 
@@ -275,19 +317,20 @@ def token_for(user: User) -> str:
 def decode_token(token: str, db: Optional[Session] = None) -> dict:
     """
     Decode and strictly validate standard JWT token signature, algorithm, claims, expiration, and revocation.
-    Rejects tokens signed with known compromised keys (SEC-JWT-01, SEC-JWT-06, FR-AUTH-02, FR-AUTH-03).
+    Rejects tokens signed with known compromised keys (SEC-JWT-01, SEC-JWT-06, FR-AUTH-02, FR-AUTH-03, FR-JWT-05, FR-JWT-06, FR-JWT-07, AT-09, AT-10).
     """
     # 1. Reject tokens signed with known compromised secrets
     for comp_key in COMPROMISED_KEYS:
         try:
             jwt.decode(token, comp_key, algorithms=["HS256", "HS384", "HS512"], options={"verify_signature": True})
-            raise HTTPException(401, "Token was signed with a compromised signing key. Re-authentication required (SEC-JWT-01).")
+            raise HTTPException(401, "Token was signed with a compromised signing key. Re-authentication required (SEC-JWT-01, FR-JWT-05).")
         except HTTPException:
             raise
         except (jwt.InvalidSignatureError, jwt.DecodeError, Exception):
             pass
 
     secret_key = SECRET.decode("utf-8") if isinstance(SECRET, bytes) else str(SECRET)
+    payload = None
     try:
         payload = jwt.decode(
             token,
@@ -300,22 +343,40 @@ def decode_token(token: str, db: Optional[Session] = None) -> dict:
     except jwt.ExpiredSignatureError:
         raise HTTPException(401, "Session expired. Please sign in again (SEC-003).")
     except jwt.InvalidAlgorithmError:
-        raise HTTPException(401, "Disallowed signing algorithm (SEC-JWT-06).")
+        raise HTTPException(401, "Disallowed signing algorithm (SEC-JWT-06, FR-JWT-06).")
     except jwt.InvalidTokenError:
-        # Check legacy HMAC format fallback for old tests if active key matches
+        # Check legacy HMAC format fallback with sunset policy and claim validation (FR-JWT-07)
         if "." in token:
             try:
+                try:
+                    sunset_dt = datetime.fromisoformat(LEGACY_TOKEN_SUNSET_DATE.replace("Z", "+00:00"))
+                except Exception:
+                    sunset_dt = datetime(2026, 12, 31, 23, 59, 59, tzinfo=timezone.utc)
+                if datetime.now(timezone.utc) > sunset_dt:
+                    raise HTTPException(401, "Legacy token format has expired under migration sunset policy (FR-JWT-07). Please sign in again.")
+
                 body, sig = token.rsplit(".", 1)
                 expected_sig = hmac.new(SECRET, body.encode(), hashlib.sha256).hexdigest()
                 if hmac.compare_digest(sig, expected_sig):
                     p = json.loads(base64.urlsafe_b64decode(body))
-                    if p.get("exp", 0) > datetime.now(timezone.utc).timestamp():
-                        return p
+                    if p.get("exp", 0) <= datetime.now(timezone.utc).timestamp():
+                        raise HTTPException(401, "Session expired. Please sign in again (SEC-003).")
+                    if not p.get("uid") or not p.get("tid"):
+                        raise HTTPException(401, "Legacy session missing required identity claims (FR-JWT-07).")
+                    payload = p
+                else:
+                    raise HTTPException(401, "Invalid session credentials. Please sign in again.")
+            except HTTPException:
+                raise
             except Exception:
-                pass
+                raise HTTPException(401, "Invalid session credentials. Please sign in again.")
+        else:
+            raise HTTPException(401, "Invalid session credentials. Please sign in again.")
+
+    if payload is None:
         raise HTTPException(401, "Invalid session credentials. Please sign in again.")
 
-    # 2. Check revocation and user state if db session provided
+    # 2. Check revocation and user state if db session provided (FR-JWT-07, FR-JWT-08, AT-10)
     if db is not None:
         jti = payload.get("jti")
         if jti:
@@ -331,7 +392,7 @@ def decode_token(token: str, db: Optional[Session] = None) -> dict:
         if getattr(user, "password_changed_at", None):
             pwd_ts = int(user.password_changed_at.replace(tzinfo=timezone.utc).timestamp()) if user.password_changed_at.tzinfo is None else int(user.password_changed_at.timestamp())
             if payload.get("iat", 0) < pwd_ts:
-                raise HTTPException(401, "Password was changed since session was issued. Please sign in again (FR-AUTH-05).")
+                raise HTTPException(401, "Password was changed since session was issued. Please sign in again (FR-AUTH-05, FR-JWT-08).")
 
     return payload
 
