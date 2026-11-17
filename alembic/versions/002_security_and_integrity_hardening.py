@@ -26,35 +26,39 @@ def upgrade() -> None:
     if "users" in tables:
         cols = {c["name"] for c in inspector.get_columns("users")}
         if "password_changed_at" not in cols:
-            op.add_column("users", sa.Column("password_changed_at", sa.DateTime(), nullable=True))
+            with op.batch_alter_table("users") as batch_op:
+                batch_op.add_column(sa.Column("password_changed_at", sa.DateTime(), nullable=True))
 
     # 2. import_jobs: initiating_user_id, file_hash
     if "import_jobs" in tables:
         cols = {c["name"] for c in inspector.get_columns("import_jobs")}
-        if "initiating_user_id" not in cols:
-            op.add_column("import_jobs", sa.Column("initiating_user_id", sa.Integer(), nullable=True))
-        if "file_hash" not in cols:
-            op.add_column("import_jobs", sa.Column("file_hash", sa.String(64), nullable=True))
+        with op.batch_alter_table("import_jobs") as batch_op:
+            if "initiating_user_id" not in cols:
+                batch_op.add_column(sa.Column("initiating_user_id", sa.Integer(), nullable=True))
+            if "file_hash" not in cols:
+                batch_op.add_column(sa.Column("file_hash", sa.String(64), nullable=True))
 
     # 3. prediction_history: is_tentative, provenance
     if "prediction_history" in tables:
         cols = {c["name"] for c in inspector.get_columns("prediction_history")}
-        if "is_tentative" not in cols:
-            op.add_column("prediction_history", sa.Column("is_tentative", sa.Boolean(), server_default=sa.false()))
-        if "provenance" not in cols:
-            op.add_column("prediction_history", sa.Column("provenance", sa.String(100), server_default="benchmark"))
+        with op.batch_alter_table("prediction_history") as batch_op:
+            if "is_tentative" not in cols:
+                batch_op.add_column(sa.Column("is_tentative", sa.Boolean(), server_default=sa.false()))
+            if "provenance" not in cols:
+                batch_op.add_column(sa.Column("provenance", sa.String(100), server_default="benchmark"))
 
     # 4. audit_events: actor_id, target, status, details
     if "audit_events" in tables:
         cols = {c["name"] for c in inspector.get_columns("audit_events")}
-        if "actor_id" not in cols:
-            op.add_column("audit_events", sa.Column("actor_id", sa.Integer(), nullable=True))
-        if "target" not in cols:
-            op.add_column("audit_events", sa.Column("target", sa.String(120), nullable=True))
-        if "status" not in cols:
-            op.add_column("audit_events", sa.Column("status", sa.String(30), server_default="success"))
-        if "details" not in cols:
-            op.add_column("audit_events", sa.Column("details", sa.Text(), nullable=True))
+        with op.batch_alter_table("audit_events") as batch_op:
+            if "actor_id" not in cols:
+                batch_op.add_column(sa.Column("actor_id", sa.Integer(), nullable=True))
+            if "target" not in cols:
+                batch_op.add_column(sa.Column("target", sa.String(120), nullable=True))
+            if "status" not in cols:
+                batch_op.add_column(sa.Column("status", sa.String(30), server_default="success"))
+            if "details" not in cols:
+                batch_op.add_column(sa.Column("details", sa.Text(), nullable=True))
 
     # 5. create import_previews table
     if "import_previews" not in tables:
@@ -101,10 +105,51 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    try:
-        op.drop_index("uq_tenant_student_id", table_name="students")
-    except Exception:
-        pass
-    op.drop_table("rate_limits")
-    op.drop_table("revoked_tokens")
-    op.drop_table("import_previews")
+    conn = op.get_bind()
+    inspector = sa.inspect(conn)
+    tables = inspector.get_table_names()
+
+    # 1. drop index
+    if "students" in tables:
+        try:
+            op.drop_index("uq_tenant_student_id", table_name="students")
+        except Exception:
+            pass
+
+    # 2. drop tables
+    if "rate_limits" in tables:
+        op.drop_table("rate_limits")
+
+    if "revoked_tokens" in tables:
+        op.drop_table("revoked_tokens")
+
+    if "import_previews" in tables:
+        op.drop_table("import_previews")
+
+    # 3. drop added columns using batch_alter_table for SQLite compatibility
+    if "audit_events" in tables:
+        cols = {c["name"] for c in inspector.get_columns("audit_events")}
+        with op.batch_alter_table("audit_events") as batch_op:
+            for col in ["details", "status", "target", "actor_id"]:
+                if col in cols:
+                    batch_op.drop_column(col)
+
+    if "prediction_history" in tables:
+        cols = {c["name"] for c in inspector.get_columns("prediction_history")}
+        with op.batch_alter_table("prediction_history") as batch_op:
+            for col in ["provenance", "is_tentative"]:
+                if col in cols:
+                    batch_op.drop_column(col)
+
+    if "import_jobs" in tables:
+        cols = {c["name"] for c in inspector.get_columns("import_jobs")}
+        with op.batch_alter_table("import_jobs") as batch_op:
+            for col in ["file_hash", "initiating_user_id"]:
+                if col in cols:
+                    batch_op.drop_column(col)
+
+    if "users" in tables:
+        cols = {c["name"] for c in inspector.get_columns("users")}
+        if "password_changed_at" in cols:
+            with op.batch_alter_table("users") as batch_op:
+                batch_op.drop_column("password_changed_at")
