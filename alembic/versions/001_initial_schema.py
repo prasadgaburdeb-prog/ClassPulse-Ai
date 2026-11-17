@@ -108,10 +108,9 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_table("audit_events")
-    op.drop_table("prediction_history")
-    op.drop_table("records")
-    op.drop_table("import_jobs")
-    op.drop_table("students")
-    op.drop_table("users")
-    op.drop_table("tenants")
+    conn = op.get_bind()
+    inspector = sa.inspect(conn)
+    tables = inspector.get_table_names()
+    for tbl in ["audit_events", "prediction_history", "records", "import_jobs", "students", "users", "tenants"]:
+        if tbl in tables:
+            op.drop_table(tbl)
