@@ -1014,6 +1014,8 @@ class StudentExamPredictor:
             "is_incomplete": len(missing_inputs) > 0,
             "is_tentative": len(missing_inputs) > 0,
             "provenance": self.dataset_provenance,
+            "dataset_provenance": self.dataset_provenance,
+            "is_synthetic": self.is_synthetic,
             "missing_inputs": missing_inputs,
             "pass_probability": pass_prob,
             "predicted_outcome": predicted_outcome,

@@ -7,19 +7,20 @@ ClassPulse AI is an enterprise coaching-centre intelligence platform with an int
 ## Key Capabilities (v2.1.0 Improvements)
 
 1. **AI Exam Success Predictor (Pure Academic Model — ML-027 to ML-031)**
-   - Utilizes a calibrated **Random Forest Classifier Ensemble** trained on competitive examination benchmarks (JEE, NEET, Foundation, Boards).
+   - Utilizes a single **Random Forest Classifier** (150 estimators, balanced class weights) trained on competitive examination synthetic benchmarks (JEE, NEET, Foundation, Boards). It is implemented as a single standalone Random Forest model, without secondary stacking or calibration layers (FR-ML-01).
    - Generates exact continuous **Pass Probabilities (0–100%)** and classifies risk into three tiers:
      - **Safe / Likely to Pass** (&ge; 75% probability)
      - **Borderline / Moderate Risk** (50% – 74.9% probability)
      - **High Risk of Failing** (&lt; 50% probability)
    - **Strict Academic / Financial Separation:** Unpaid fees and financial balances are evaluated independently without introducing socioeconomic bias into academic pass forecasting.
-   - **Held-Out Model Verification & Provenance (ML-007 to ML-014):**
-     - Held-out test accuracy: **74.2%** | F1-Score: **79.3%** | ROC-AUC: **82.8%** | Brier Score: **0.174**
-     - 5-Fold Stratified Cross-Validation: **80.7% ± 4.26%**
-     - Transparent provenance metadata and statutory pedagogical disclaimers.
-   - **Retraining Engine with Safety Gates (ML-015 to ML-020):**
+   - **Synthetic Benchmark Verification & Provenance (ML-007 to ML-014, FR-ML-02, FR-ML-03):**
+     - Base model provenance is explicitly labeled as `synthetic_benchmark` (demonstration data, not real-world institution outcomes).
+     - Synthetic benchmark held-out test accuracy: **74.2%** | F1-Score: **79.3%** | ROC-AUC: **82.8%** | Brier Score Loss: **0.174**
+     - Synthetic benchmark 5-Fold Stratified Cross-Validation: **80.7% ± 4.26%**
+     - Transparent provenance metadata and statutory pedagogical disclaimers on all predictions and reports. Validated real-world accuracy claims require reproducible evaluation on verified historical cohorts (FR-ML-04).
+   - **Retraining Engine with Safety Gates (ML-015 to ML-020, FR-ML-06):**
      - Retrain on verified centre historical cohorts ($\ge 30$ student samples, $\ge 5$ pass/fail).
-     - Automated rollback if retrained candidate model fails the 60% accuracy threshold.
+     - Automated rollback: Candidate model is evaluated against validation gates before replacing the active model; if the candidate fails the 60% accuracy threshold, the active model is preserved.
 
 2. **Student 360-Degree Profile & Directory (FEAT-001 to FEAT-019)**
    - Searchable, paginated Student Directory with course, batch, and risk filters.

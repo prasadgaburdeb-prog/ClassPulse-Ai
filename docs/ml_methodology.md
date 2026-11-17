@@ -27,19 +27,28 @@ The Random Forest model consumes an input feature vector $X \in \mathbb{R}^5$ co
 
 ---
 
-## 3. Benchmark Model Provenance & Transparency (ML-005, ML-008, ML-011)
+## 3. Model Architecture, Benchmark Provenance & Transparency (ML-005, ML-008, ML-011, FR-ML-01, FR-ML-02)
 
-The base model version is **`v2.1.0-benchmark`**, trained on a synthetic benchmark dataset calibrated to Indian competitive exam profiles ($N = 1,200$) with a stratified 80/20 train/test split.
+### Model Architecture
+The ML predictor is implemented as a single **`RandomForestClassifier`** (Scikit-learn) with `n_estimators=150`, `max_depth=6`, `min_samples_split=4`, and `class_weight="balanced"`.
+- It is a single decision-tree classifier; it does not combine multiple distinct model families (FR-ML-01).
+- No secondary calibration wrappers (e.g. `CalibratedClassifierCV`) or stacking layers are applied to the base model.
+
+### Benchmark Model Provenance
+The base model version is **`v2.1.0-benchmark`**, trained on a synthetic academic benchmark dataset ($N = 1,200$) with a stratified 80/20 train/test split.
 
 > [!IMPORTANT]
-> The system explicitly labels this model as `synthetic_benchmark` in the user interface, API responses (`provenance`), and exported PDF reports. Benchmark metrics are explicitly documented as synthetic benchmark evaluations and are never falsely claimed to represent real-world institution outcomes.
+> The system explicitly labels this baseline model as `synthetic_benchmark` across the user interface, API responses (`provenance`, `is_synthetic`), and exported PDF reports (FR-ML-03).
+> 
+> All metrics reported below are **synthetic benchmark metrics** computed on generated demonstration data. They do **not** represent verified real-world institutional outcomes (FR-ML-02).
+> Claims of validated real-world accuracy or production readiness require reproducible evaluation on verified centre cohort data using an approved evaluation protocol (FR-ML-04).
 
-### Held-Out Evaluation Metrics:
-- **Held-Out Test Accuracy:** $74.2\%$
-- **F1 Score:** $79.3\%$
-- **ROC-AUC Score:** $82.8\%$
-- **Brier Score Loss:** $0.174$ (Well-calibrated probabilities)
-- **5-Fold Stratified Cross-Validation:** $80.7\% \pm 4.26\%$
+### Synthetic Benchmark Evaluation Metrics:
+- **Synthetic Held-Out Test Accuracy:** $74.2\%$
+- **Synthetic F1 Score:** $79.3\%$
+- **Synthetic ROC-AUC Score:** $82.8\%$
+- **Synthetic Brier Score Loss:** $0.174$
+- **Synthetic 5-Fold Stratified Cross-Validation:** $80.7\% \pm 4.26\%$
 
 ---
 

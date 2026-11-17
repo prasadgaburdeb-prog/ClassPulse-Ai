@@ -304,7 +304,8 @@ def generate_student_report_card(
 
     # 6. Financial Clearance Standing (Tracked Independently per ML-027, ML-030)
     story.append(Paragraph("3. Financial Standing (Administered Separately)", styles["SectionHeading"]))
-    fin = student_profile.get("financial_standing") or student_profile.get("financial_risk", {})
+    raw_fin = student_profile.get("financial_risk") or student_profile.get("financial_standing") or {}
+    fin = {"financial_status": raw_fin} if isinstance(raw_fin, str) else dict(raw_fin)
     fee_pct = fin.get("fee_clearance_pct", fin.get("clearance_pct", student_profile.get("fee_clearance_pct", 100.0)))
     fee_due = fin.get("outstanding_fees", student_profile.get("outstanding_fees", 0.0))
     fin_status = fin.get("financial_status", fin.get("fee_status", "Paid in Full" if fee_due <= 0 else "Pending Dues"))
@@ -450,6 +451,7 @@ def generate_cohort_summary_report(
     m_auc = summary_data.get("model_roc_auc", 0.0)
 
     prov_display = "Synthetic Academic Benchmark" if "synthetic" in str(m_prov).lower() else "Retrained on Verified Historical Outcomes"
+    val_heading = "<b>Synthetic Benchmark Metrics:</b>" if "synthetic" in str(m_prov).lower() else "<b>Held-out Validation:</b>"
 
     ml_meta_data = [
         [
@@ -461,7 +463,7 @@ def generate_cohort_summary_report(
         [
             Paragraph("<b>Dataset Provenance:</b>", styles["TableCellBold"]),
             Paragraph(prov_display, styles["TableCell"]),
-            Paragraph("<b>Held-out Validation:</b>", styles["TableCellBold"]),
+            Paragraph(val_heading, styles["TableCellBold"]),
             Paragraph(f"Accuracy: {m_acc}% | ROC-AUC: {m_auc}%", styles["TableCell"])
         ]
     ]
