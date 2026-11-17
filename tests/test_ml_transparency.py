@@ -1,0 +1,136 @@
+"""
+Automated Acceptance Tests for AT-11: ML Transparency, Claim Consistency and Provenance
+Requirements: FR-ML-01 to FR-ML-06, AT-11
+"""
+import os
+import re
+import pytest
+from sklearn.ensemble import RandomForestClassifier
+from app.ml_model import StudentExamPredictor, predictor
+from app.pdf_reports import generate_cohort_summary_report, generate_student_report_card
+
+def test_at_11_model_implementation_architecture():
+    """FR-ML-01, AT-11: Verify model is a single RandomForestClassifier, not a multi-model ensemble."""
+    # 1. Model type must be a single RandomForestClassifier
+    assert isinstance(predictor.model, RandomForestClassifier)
+    assert not hasattr(predictor.model, "estimators_") or isinstance(predictor.model.estimators_[0], object)
+    
+    # Must NOT be an ensemble of different model types (e.g. VotingClassifier, StackingClassifier)
+    class_name = predictor.model.__class__.__name__
+    assert class_name == "RandomForestClassifier"
+    
+    # Check parameters
+    assert predictor.model.n_estimators == 150
+    assert predictor.model.class_weight == "balanced"
+    assert predictor.model.random_state == 42
+
+def test_at_11_documentation_claim_consistency():
+    """FR-ML-01, FR-ML-02, AT-11: Verify docs do not claim 'calibrated ensemble' and label metrics as synthetic."""
+    doc_paths = ["README.md", "docs/ml_methodology.md", "docs/architecture.md"]
+    
+    forbidden_phrases = [
+        re.compile(r"calibrated\s+ensemble", re.I),
+        re.compile(r"calibrated\s+random\s+forest\s+classifier\s+ensemble", re.I),
+        re.compile(r"multi-model\s+ensemble", re.I),
+    ]
+    
+    for doc in doc_paths:
+        assert os.path.exists(doc), f"Missing documentation file: {doc}"
+        with open(doc, "r", encoding="utf-8") as f:
+            content = f.read()
+            for pattern in forbidden_phrases:
+                match = pattern.search(content)
+                assert match is None, f"Found misleading phrase '{match.group(0)}' in {doc} (violates FR-ML-01)"
+            
+            # Verify synthetic benchmark metrics are explicitly identified
+            if doc in ["README.md", "docs/ml_methodology.md"]:
+                assert "synthetic" in content.lower(), f"{doc} must explicitly label benchmark data as synthetic (FR-ML-02)"
+
+def test_at_11_provenance_metadata_transparency():
+    """FR-ML-02, FR-ML-03: Model metadata and predictions explicitly tag synthetic provenance."""
+    # Verify predictor attributes
+    assert predictor.dataset_provenance == "synthetic_benchmark"
+    assert predictor.is_synthetic is True
+    assert "benchmark" in predictor.model_version.lower()
+
+    # Verify prediction outputs include provenance and synthetic flags
+    sample_profile = {
+        "student_id": "TEST-PROV-001",
+        "attendance_rate": 82.0,
+        "present_count": 33,
+        "total_sessions": 40,
+        "avg_mock_score": 74.0,
+        "has_mock_records": True,
+        "course_id": "JEE"
+    }
+    pred = predictor.predict_student(sample_profile)
+    assert pred["dataset_provenance"] == "synthetic_benchmark"
+    assert pred["is_synthetic"] is True
+    assert pred["is_tentative"] is False
+
+def test_at_11_missing_academic_inputs_warning_not_fabrication():
+    """FR-ML-05: Missing/insufficient academic inputs produce warnings and tentative marking."""
+    profile_missing_mocks = {
+        "student_id": "TEST-MISSING-001",
+        "attendance_rate": 88.0,
+        "present_count": 35,
+        "total_sessions": 40,
+        "avg_mock_score": None,
+        "has_mock_records": False,
+        "course_id": "NEET"
+    }
+    pred = predictor.predict_student(profile_missing_mocks)
+    
+    # Must flag as tentative and incomplete
+    assert pred["is_tentative"] is True
+    assert pred["is_incomplete"] is True
+    assert pred["data_status"] == "incomplete_missing_mock_scores"
+    assert "Mock Exam Scores" in pred["missing_inputs"]
+    assert any("missing" in factor.lower() for factor in pred["key_factors"])
+
+def test_at_11_pdf_report_provenance_labels():
+    """FR-ML-02, FR-ML-03, AT-11: Generated PDF reports display synthetic benchmark metrics."""
+    student_profile = {
+        "student_id": "STU-PDF-001",
+        "full_name": "Test Student",
+        "course": "JEE Advanced",
+        "batch": "Batch 2026",
+        "attendance_pct": 82.5,
+        "present_count": 33,
+        "total_sessions": 40,
+        "avg_mock_score": 76.0,
+        "academic_risk_tier": "Safe / High Probability",
+        "pass_probability": 85.0,
+        "financial_standing": "Clear",
+        "total_fees_due": 0.0,
+        "total_fees_paid": 50000.0,
+        "model_version": "v2.1.0-benchmark",
+        "dataset_provenance": "synthetic_benchmark",
+        "model_accuracy": 74.2,
+        "model_roc_auc": 82.8,
+        "recommendations": ["Maintain current mock performance"],
+        "key_factors": ["High attendance rate", "Consistent test scores"]
+    }
+    
+    # Test generation does not raise error and produces valid PDF bytes
+    pdf_bytes = generate_student_report_card(student_profile)
+    assert isinstance(pdf_bytes, bytes)
+    assert len(pdf_bytes) > 1000
+    assert pdf_bytes.startswith(b"%PDF")
+
+    summary_data = {
+        "cohort_name": "JEE 2026 Cohort",
+        "total_students": 50,
+        "pass_expected_pct": 78.0,
+        "risk_distribution": {"Safe": 35, "Moderate": 10, "High Risk": 5},
+        "model_name": "Random Forest Classifier",
+        "model_version": "v2.1.0-benchmark",
+        "dataset_provenance": "synthetic_benchmark",
+        "model_accuracy": 74.2,
+        "model_roc_auc": 82.8,
+        "students": [student_profile]
+    }
+    summary_pdf = generate_cohort_summary_report(summary_data)
+    assert isinstance(summary_pdf, bytes)
+    assert len(summary_pdf) > 1000
+    assert summary_pdf.startswith(b"%PDF")

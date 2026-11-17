@@ -863,10 +863,11 @@ async function loadPredictions() {
       `).join('');
     }
 
+    const provTag = (s.dataset_provenance && s.dataset_provenance.includes('synthetic')) ? 'Synthetic Benchmark ' : '';
     $('#modelDetailsText').innerHTML = `
       Algorithm: <strong>${s.model_name}</strong><br>
-      Validation Accuracy: <strong>${s.model_accuracy}%</strong> &nbsp;|&nbsp; ROC-AUC: <strong>${s.model_roc_auc}%</strong><br>
-      Calibrated on academic benchmarks (JEE/NEET/Foundation).
+      ${provTag}Validation Accuracy: <strong>${s.model_accuracy}%</strong> &nbsp;|&nbsp; ROC-AUC: <strong>${s.model_roc_auc}%</strong><br>
+      Trained on academic benchmarks (JEE/NEET/Foundation). Synthetic demonstration baseline.
     `;
 
     // Render Student Predictions Table
