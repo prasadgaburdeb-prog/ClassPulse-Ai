@@ -31,8 +31,9 @@ The Random Forest model consumes an input feature vector $X \in \mathbb{R}^5$ co
 
 ### Model Architecture
 The ML predictor is implemented as a single **`RandomForestClassifier`** (Scikit-learn) with `n_estimators=150`, `max_depth=6`, `min_samples_split=4`, and `class_weight="balanced"`.
+- **Canonical Model Display Name:** `Random Forest Classifier (Synthetic Benchmark)` across all API metadata, exports, and PDF reports (FR-ML-01).
 - It is a single decision-tree classifier; it does not combine multiple distinct model families (FR-ML-01).
-- No secondary calibration wrappers (e.g. `CalibratedClassifierCV`) or stacking layers are applied to the base model.
+- No secondary calibration wrappers (e.g. `CalibratedClassifierCV`) or stacking layers are applied to the base model (FR-ML-02).
 
 ### Benchmark Model Provenance
 The base model version is **`v2.1.0-benchmark`**, trained on a synthetic academic benchmark dataset ($N = 1,200$) with a stratified 80/20 train/test split.

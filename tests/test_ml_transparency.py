@@ -123,7 +123,7 @@ def test_at_11_pdf_report_provenance_labels():
         "total_students": 50,
         "pass_expected_pct": 78.0,
         "risk_distribution": {"Safe": 35, "Moderate": 10, "High Risk": 5},
-        "model_name": "Random Forest Classifier",
+        "model_name": "Random Forest Classifier (Synthetic Benchmark)",
         "model_version": "v2.1.0-benchmark",
         "dataset_provenance": "synthetic_benchmark",
         "model_accuracy": 74.2,
@@ -191,4 +191,80 @@ def test_ml_009_human_governance_in_documentation():
     assert "Decision Support Exclusively" in content
     assert "Prohibition of Automated Adverse Actions" in content
     assert "Mandatory Faculty Verification" in content
+
+
+def test_fr_ml_01_and_fr_ml_02_canonical_model_naming():
+    """FR-ML-01, FR-ML-02: Enforce canonical model name and eliminate stale calibration claims."""
+    canonical_name = "Random Forest Classifier (Synthetic Benchmark)"
+    
+    # 1. Direct predictor inspection
+    assert predictor.model_name == canonical_name
+    assert "calibration" not in predictor.model_name.lower()
+    
+    # 2. Empty profile formatting
+    empty_res = predictor._format_predictions([])
+    assert empty_res["summary"]["model_name"] == canonical_name
+    assert "academic calibration" not in empty_res["summary"]["model_name"].lower()
+    
+    # 3. Formatted prediction payload with students
+    sample_profile = {
+        "student_id": "TEST-CANONICAL-001",
+        "attendance_rate": 85.0,
+        "present_count": 34,
+        "total_sessions": 40,
+        "avg_mock_score": 78.0,
+        "has_mock_records": True,
+        "course_id": "JEE",
+        "batch_id": "Batch-A"
+    }
+    pop_res = predictor._format_predictions([sample_profile])
+    assert pop_res["summary"]["model_name"] == canonical_name
+    assert "academic calibration" not in pop_res["summary"]["model_name"].lower()
+    assert pop_res["summary"]["is_synthetic"] is True
+    assert pop_res["summary"]["dataset_provenance"] == "synthetic_benchmark"
+
+
+def test_fr_ml_03_api_and_export_canonical_model_naming():
+    """FR-ML-03: Verify model-info endpoint and CSV export use canonical name and reject stale labels."""
+    from fastapi.testclient import TestClient
+    from app.main import app, token_for, User, db_session, password_hash
+    from sqlalchemy.orm import Session
+    from sqlalchemy import select
+    from app.database import engine
+    from datetime import datetime, timezone
+
+    canonical_name = "Random Forest Classifier (Synthetic Benchmark)"
+    with Session(engine) as s:
+        user = s.scalars(select(User).where(User.email == "ml_canonical_tester@classpulse.edu")).first()
+        if not user:
+            user = User(
+                tenant_id=1,
+                email="ml_canonical_tester@classpulse.edu",
+                password_hash=password_hash("Pass123!"),
+                role="admin",
+                is_active=True,
+                created_at=datetime.now(timezone.utc)
+            )
+            s.add(user)
+            s.commit()
+            s.refresh(user)
+
+    client = TestClient(app)
+    token = token_for(user)
+    
+    # 1. GET /api/v1/ml/model-info
+    res = client.get("/api/v1/ml/model-info", headers={"Authorization": f"Bearer {token}"})
+    assert res.status_code == 200
+    info_data = res.json()
+    assert info_data["model_name"] == canonical_name
+    assert "academic calibration" not in info_data["model_name"].lower()
+    assert info_data["is_synthetic"] is True
+
+    # 2. GET /api/v1/ml/export-predictions (CSV)
+    exp_res = client.get("/api/v1/ml/export-predictions", headers={"Authorization": f"Bearer {token}"})
+    assert exp_res.status_code == 200
+    csv_text = exp_res.text
+    assert canonical_name in csv_text
+    assert "academic calibration" not in csv_text.lower()
+
 

@@ -554,7 +554,8 @@ class StudentExamPredictor:
         self.cv_std_accuracy = 0.0
         self.confusion_matrix = {"true_negative": 0, "false_positive": 0, "false_negative": 0, "true_positive": 0}
         
-        # Provenance and versioning (ML-005 to ML-008)
+        # Provenance and versioning (ML-005 to ML-008, FR-ML-01)
+        self.model_name = "Random Forest Classifier (Synthetic Benchmark)"
         self.model_version = "v2.1.0-benchmark"
         self.training_date = ""
         self.dataset_provenance = "synthetic_benchmark"
@@ -1082,7 +1083,7 @@ class StudentExamPredictor:
                     "borderline": 0,
                     "high_risk": 0,
                     "avg_pass_probability": 0.0,
-                    "model_name": "Random Forest Classifier (Academic Calibration)",
+                    "model_name": self.model_name,
                     "model_version": self.model_version,
                     "dataset_provenance": self.dataset_provenance,
                     "is_synthetic": self.is_synthetic,
@@ -1126,7 +1127,7 @@ class StudentExamPredictor:
             "borderline": borderline,
             "high_risk": high_risk,
             "avg_pass_probability": avg_prob,
-            "model_name": "Random Forest Classifier (Academic Calibration)",
+            "model_name": self.model_name,
             "model_version": self.model_version,
             "dataset_provenance": self.dataset_provenance,
             "is_synthetic": self.is_synthetic,

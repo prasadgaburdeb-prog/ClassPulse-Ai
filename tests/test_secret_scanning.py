@@ -102,7 +102,7 @@ def test_sec_013_repository_secret_scanning():
         "status": "PASSED",
         "findings_count": len(scan_findings),
         "compromised_key_status": "INACTIVE_AND_BLOCKLISTED",
-        "scanner_version": "ClassPulse-SecScan-v4.0"
+        "scanner_version": "ClassPulse-SecScan-v5.0"
     }
 
     report_path = os.path.join("tests", "secret_scan_result.json")
@@ -110,3 +110,49 @@ def test_sec_013_repository_secret_scanning():
         json.dump(scan_report, f, indent=2)
 
     assert os.path.exists(report_path)
+
+
+def test_sec_014_full_git_history_secret_scanning():
+    """FR-SEC-01 to FR-SEC-06, SEC-014: Full Git history scan across all reachable commits for unredacted active credentials."""
+    try:
+        res = subprocess.run(["git", "rev-list", "--all"], capture_output=True, text=True, check=True)
+        commits = [c.strip() for c in res.stdout.splitlines() if c.strip()]
+    except Exception:
+        pytest.skip("Git history not available in current environment")
+
+    assert len(commits) > 0, "No commits found in Git history"
+
+    critical_active_patterns = [
+        (re.compile(r'AKIA[0-9A-Z]{16}'), "AWS Access Key ID"),
+        (re.compile(r'-----BEGIN (?:RSA|OPENSSH|EC|PGP) PRIVATE KEY-----'), "Private Key Header"),
+        (re.compile(r'gh[pousr]_[A-Za-z0-9_]{36,255}'), "GitHub Personal Access Token"),
+        (re.compile(r'sk_live_[0-9a-zA-Z]{24,}'), "Stripe Live Secret Key"),
+        (re.compile(r'xox[baprs]-[0-9a-zA-Z]{10,48}'), "Slack Token"),
+    ]
+
+    active_leaks = []
+    scanned_commits = 0
+
+    for commit in commits:
+        scanned_commits += 1
+        diff = subprocess.run(["git", "show", "--unified=0", commit], capture_output=True, text=True, errors="replace").stdout
+        for pattern, desc in critical_active_patterns:
+            for match in pattern.finditer(diff):
+                active_leaks.append({
+                    "commit": commit[:8],
+                    "category": desc,
+                    "snippet": match.group(0)[:12] + "..."
+                })
+
+    assert len(active_leaks) == 0, f"Critical live credentials detected in Git history: {active_leaks}"
+
+    # Verify that tests/secret_scan_result.json records full history clearance
+    report_path = os.path.join("tests", "secret_scan_result.json")
+    if os.path.exists(report_path):
+        with open(report_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        data["history_commits_scanned"] = scanned_commits
+        data["history_status"] = "PASSED_CLEAN"
+        with open(report_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+

@@ -229,7 +229,7 @@ function dashboard() {
       <div class="panel-header">
         <div>
           <h2>AI Student Exam Pass Predictor</h2>
-          <p class="small">Machine Learning model (Random Forest Classifier) analyzing attendance regularity, mock exam scores, and course benchmark rigor to predict student pass probabilities.</p>
+          <p class="small">Machine Learning model (Random Forest Classifier - Synthetic Benchmark) analyzing attendance regularity, mock exam scores, and course benchmark rigor to predict student pass probabilities.</p>
         </div>
         <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
           <a class="button" href="/api/v1/reports/pdf/cohort-summary" target="_blank" style="text-decoration:none; font-size:12px; padding: 7px 14px; background: #0284c7; color: white;">⬇ Cohort PDF Report</a>

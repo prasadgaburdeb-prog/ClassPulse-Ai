@@ -442,9 +442,9 @@ def generate_cohort_summary_report(
     story.append(kpi_table)
     story.append(Spacer(1, 12))
 
-    # 4. Model Evaluation & Methodology Metadata (ML-007, ML-008, ML-010)
+    # 4. Model Evaluation & Methodology Metadata (ML-007, ML-008, ML-010, FR-ML-01)
     story.append(Paragraph("2. Machine Learning Pipeline Provenance & Model Audit", styles["SectionHeading"]))
-    m_name = summary_data.get("model_name", "Random Forest Classifier")
+    m_name = summary_data.get("model_name", "Random Forest Classifier (Synthetic Benchmark)")
     m_ver = summary_data.get("model_version", "v2.1.0-benchmark")
     m_prov = summary_data.get("dataset_provenance", "synthetic_benchmark")
     m_acc = summary_data.get("model_accuracy", 0.0)
