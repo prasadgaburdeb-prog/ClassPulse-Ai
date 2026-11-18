@@ -134,3 +134,61 @@ def test_at_11_pdf_report_provenance_labels():
     assert isinstance(summary_pdf, bytes)
     assert len(summary_pdf) > 1000
     assert summary_pdf.startswith(b"%PDF")
+
+def test_ml_003_and_ml_009_artifact_metadata_and_governance():
+    """ML-003, ML-009: Model artifact metadata records schema and human review policy."""
+    from fastapi.testclient import TestClient
+    from app.main import app, token_for, User, db_session, password_hash
+    from sqlalchemy.orm import Session
+    from sqlalchemy import select
+    from app.database import engine
+    from datetime import datetime, timezone
+
+    # 1. Direct predictor inspection (ML-003)
+    assert hasattr(predictor, "feature_names") and len(predictor.feature_names) == 5
+    assert hasattr(predictor, "train_samples") and predictor.train_samples > 0
+    assert hasattr(predictor, "test_samples") and predictor.test_samples > 0
+    assert hasattr(predictor, "model_version") and "benchmark" in predictor.model_version
+    assert hasattr(predictor, "dataset_provenance") and predictor.dataset_provenance == "synthetic_benchmark"
+
+    # 2. API inspection via authenticated client (ML-003, ML-009)
+    with Session(engine) as s:
+        user = s.scalars(select(User).where(User.email == "ml_gov_user@classpulse.edu")).first()
+        if not user:
+            user = User(
+                tenant_id=1,
+                email="ml_gov_user@classpulse.edu",
+                password_hash=password_hash("Pass123!"),
+                role="faculty",
+                is_active=True,
+                created_at=datetime.now(timezone.utc)
+            )
+            s.add(user)
+            s.commit()
+            s.refresh(user)
+
+    client = TestClient(app)
+    token = token_for(user)
+    res = client.get("/api/v1/ml/model-info", headers={"Authorization": f"Bearer {token}"})
+    assert res.status_code == 200
+    data = res.json()
+
+    assert "feature_schema" in data and len(data["feature_schema"]) == 5
+    assert "dataset_size" in data and data["dataset_size"]["total"] == 1200
+    assert data["data_type"] == "synthetic"
+    assert data["is_synthetic"] is True
+    assert "human_review_policy" in data
+    assert "decision support" in data["human_review_policy"].lower()
+
+def test_ml_009_human_governance_in_documentation():
+    """ML-009: Documentation specifies human-in-the-loop review and prohibits automated adverse action."""
+    doc_path = "docs/ml_methodology.md"
+    assert os.path.exists(doc_path)
+    with open(doc_path, "r", encoding="utf-8") as f:
+        content = f.read()
+
+    assert "Human-in-the-Loop Review" in content
+    assert "Decision Support Exclusively" in content
+    assert "Prohibition of Automated Adverse Actions" in content
+    assert "Mandatory Faculty Verification" in content
+

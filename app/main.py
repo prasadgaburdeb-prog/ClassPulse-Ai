@@ -71,7 +71,7 @@ COMPROMISED_KEYS = {
 RAW_SECRET = os.getenv("JWT_SECRET_KEY") or os.getenv("SECRET_KEY")
 
 def validate_jwt_secret(secret_val: Optional[str], environment: str = "production") -> str:
-    """Validate JWT secret meets minimum security requirements (SEC-JWT-01, SEC-JWT-03, AT-JWT-01, FR-JWT-01, FR-JWT-02, AT-08)."""
+    """Validate JWT secret meets minimum security requirements (SEC-001, SEC-002, SEC-004, SEC-JWT-01, FR-JWT-01, FR-JWT-02, AT-08)."""
     val = (secret_val or "").strip()
     if environment == "production":
         if not val:
@@ -85,9 +85,15 @@ def validate_jwt_secret(secret_val: Optional[str], environment: str = "productio
             "classpulse-super-secure-production-jwt-key-2026-deb-prasad",
             "replace-this", "replace_this", "replace-with", "replace_with",
             "changeme", "change-me", "change_me", "placeholder", "your-secret",
-            "your_secret", "default-key"
+            "your_secret", "default-key", "independent_randomly_generated",
+            "independent-randomly-generated", "sample-secret", "example-secret",
+            "<independent", "secret_key_here"
         ]
-        if any(p in val_lower for p in placeholder_indicators):
+        if (
+            any(p in val_lower for p in placeholder_indicators)
+            or (val.startswith("<") and val.endswith(">"))
+            or (val.startswith("${") and val.endswith("}"))
+        ):
             raise RuntimeError("FATAL (FR-JWT-02): JWT_SECRET_KEY is a known compromised key or insecure placeholder.")
         if len(set(val)) < 8:
             raise RuntimeError("FATAL (FR-JWT-02): JWT_SECRET_KEY has insufficient character variety or entropy for production.")
@@ -1328,7 +1334,14 @@ def get_model_evaluation_info(user: User = Depends(current_user)):
         "model_name": "Random Forest Classifier (Benchmark Model)",
         "model_version": predictor.model_version,
         "dataset_provenance": predictor.dataset_provenance,
+        "data_type": "synthetic" if predictor.is_synthetic else "real",
         "is_synthetic": predictor.is_synthetic,
+        "feature_schema": getattr(predictor, "feature_names", []),
+        "dataset_size": {
+            "train": predictor.train_samples,
+            "test": predictor.test_samples,
+            "total": predictor.train_samples + predictor.test_samples
+        },
         "training_date": predictor.training_date,
         "held_out_evaluation": {
             "test_accuracy_pct": predictor.model_accuracy,
@@ -1349,6 +1362,7 @@ def get_model_evaluation_info(user: User = Depends(current_user)):
         "class_distribution": predictor.class_distribution,
         "feature_importances": predictor.get_feature_importances(),
         "academic_financial_separation": "Academic features only. Fee status tracked independently without biasing predictive accuracy (ML-027).",
+        "human_review_policy": "Decision support only. Automated predictions cannot independently determine student academic outcomes or service access (ML-009).",
         "statutory_disclaimer": "Predictions are statistical estimates for pedagogical support on benchmark datasets and do not guarantee academic outcomes (ML-002, ML-025)."
     }
 

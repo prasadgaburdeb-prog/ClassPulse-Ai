@@ -3,7 +3,11 @@ Unit & Integration Tests for ClassPulse AI Backend, Auth, RBAC & Multi-Tenancy
 Requirements: SEC-001 to SEC-016, DB-001 to DB-009, FEAT-001 to FEAT-020, TEST-001 to TEST-010
 """
 import pytest
+import json
+import uuid
+from fastapi.testclient import TestClient
 from app.main import (
+    app,
     password_hash,
     verify_password,
     token_for,
@@ -12,7 +16,9 @@ from app.main import (
     Tenant,
     Student,
     Record,
-    SessionLocal
+    ImportJob,
+    SessionLocal,
+    sync_students_from_records
 )
 from app.pdf_reports import generate_student_report_card, generate_cohort_summary_report
 
@@ -121,3 +127,106 @@ def test_cohort_summary_pdf_generation():
     assert isinstance(pdf_bytes, bytes)
     assert len(pdf_bytes) > 2000
     assert pdf_bytes.startswith(b"%PDF")
+
+def test_reg_003_student_lifecycle_crud():
+    """REG-003: Student lifecycle operations — creation/sync, profile lookup, directory listing, and cleanup."""
+    client = TestClient(app)
+    db = SessionLocal()
+    try:
+        # Create an isolated temporary tenant
+        unique_suffix = uuid.uuid4().hex[:8]
+        tenant = Tenant(name=f"CRUD Test Institution {unique_suffix}")
+        db.add(tenant)
+        db.commit()
+        db.refresh(tenant)
+
+        # Create admin user for this tenant
+        user = User(
+            tenant_id=tenant.id,
+            email=f"crud_admin_{unique_suffix}@classpulse.ai",
+            password_hash=password_hash("AdminPass123!"),
+            full_name="CRUD Admin",
+            role="admin",
+            is_active=True
+        )
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+
+        auth_header = {"Authorization": f"Bearer {token_for(user)}"}
+
+        # 1. Initially student directory is empty for this tenant
+        res_empty = client.get("/api/v1/students", headers=auth_header)
+        assert res_empty.status_code == 200
+        assert res_empty.json()["total_students"] == 0
+
+        # 2. Add an import job and student record
+        job = ImportJob(tenant_id=tenant.id, filename="student_crud_test.csv", status="completed")
+        db.add(job)
+        db.commit()
+        db.refresh(job)
+
+        stu_id = f"STU-CRUD-{unique_suffix}"
+        rec = Record(
+            tenant_id=tenant.id,
+            import_id=job.id,
+            record_type="student",
+            data_json=json.dumps({
+                "student_id": stu_id,
+                "name": "Priya Sharma",
+                "course_id": "NEET-Prep",
+                "batch_id": "Batch-2026",
+                "attendance_rate": 92.5,
+                "avg_mock_score": 88.0,
+                "total_obligations": 30000.0,
+                "total_paid": 30000.0
+            })
+        )
+        db.add(rec)
+        db.commit()
+
+        # 3. Listing students reflects the synced record
+        res_list = client.get("/api/v1/students", headers=auth_header)
+        assert res_list.status_code == 200
+        data = res_list.json()
+        assert data["total_students"] == 1
+        assert data["students"][0]["student_id"] == stu_id
+
+        # 4. Search filter by query string
+        res_search = client.get(f"/api/v1/students?q={stu_id}", headers=auth_header)
+        assert res_search.status_code == 200
+        assert len(res_search.json()["students"]) == 1
+
+        res_miss = client.get("/api/v1/students?q=NON_EXISTENT_ID", headers=auth_header)
+        assert res_miss.status_code == 200
+        assert len(res_miss.json()["students"]) == 0
+
+        # 5. Fetch full 360-degree profile
+        res_profile = client.get(f"/api/v1/students/{stu_id}", headers=auth_header)
+        assert res_profile.status_code == 200
+        prof_data = res_profile.json()
+        assert prof_data["student_id"] == stu_id
+        assert prof_data["course_id"] == "NEET-Prep"
+        assert prof_data["batch_id"] == "Batch-2026"
+        assert "academic_metrics" in prof_data
+        assert "current_prediction" in prof_data
+
+        # 6. Delete centre data (CRUD cleanup / account data wipe)
+        res_del = client.delete("/api/v1/account/data", headers=auth_header)
+        assert res_del.status_code == 200
+
+        # 7. Verify directory is empty again
+        res_after = client.get("/api/v1/students", headers=auth_header)
+        assert res_after.status_code == 200
+        assert res_after.json()["total_students"] == 0
+
+    finally:
+        # Final safety cleanup of this test tenant
+        db.query(Record).filter(Record.tenant_id == tenant.id).delete()
+        db.query(Student).filter(Student.tenant_id == tenant.id).delete()
+        db.query(ImportJob).filter(ImportJob.tenant_id == tenant.id).delete()
+        db.query(User).filter(User.tenant_id == tenant.id).delete()
+        db.query(Tenant).filter(Tenant.id == tenant.id).delete()
+        db.commit()
+        db.close()
+

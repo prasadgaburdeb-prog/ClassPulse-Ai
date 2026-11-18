@@ -1,9 +1,37 @@
 """Initial baseline schema
 
 Revision ID: 001_initial_schema
-Revises: 
+Revises: None
 Create Date: 2026-11-14 12:00:00
 
+Purpose:
+    Instantiates the core relational database schema for ClassPulse AI, including
+    multi-tenant isolation, user accounts, normalized student profiles, event logs,
+    import jobs, predictions, audit events, token revocations, and rate limiting.
+
+Expected Data Impact:
+    Zero impact on existing databases with pre-existing tables due to existence checks.
+    For clean databases, creates the primary 10 relational entities:
+    - tenants
+    - users
+    - students
+    - records
+    - import_jobs
+    - import_previews
+    - prediction_history
+    - audit_events
+    - revoked_tokens
+    - rate_limits
+
+Locking Considerations:
+    DDL operations acquire table-level exclusive metadata locks during CREATE TABLE.
+    On MySQL/PostgreSQL, transactional DDL or atomic metadata lock applies.
+    On SQLite, database-level lock during table creation. No impact on existing rows.
+
+Rollback Limitations:
+    Downgrade drops all core application tables. This is a destructive operation that
+    purges all institutional student records, users, and audit logs. A verified database
+    backup must always be confirmed before executing downgrade (DB-006, DB-007).
 """
 from typing import Sequence, Union
 

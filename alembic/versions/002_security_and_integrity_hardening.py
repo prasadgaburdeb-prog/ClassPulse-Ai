@@ -4,6 +4,30 @@ Revision ID: 002_security_hardening
 Revises: 001_initial_schema
 Create Date: 2026-11-14 12:05:00
 
+Purpose:
+    Hardens database schema for enhanced authentication security, longitudinal auditability,
+    data integrity, and import idempotency without breaking existing student profiles or records.
+    Adds:
+    - users.password_changed_at for session invalidation on password change (FR-AUTH-05, SEC-010)
+    - import_jobs.initiating_user_id and file_hash for deduplication and audit tracking (DATA-004)
+    - prediction_history.is_tentative and provenance for ML explainability (ML-005, ML-023)
+    - audit_events.actor_id, target, status, details for security logging (SEC-AUD-01)
+    - students: composite unique constraint (tenant_id, student_id) for tenant isolation
+
+Expected Data Impact:
+    Zero data loss. Non-destructive column additions with sensible defaults. Existing records
+    and tenant boundaries are fully preserved.
+
+Locking Considerations:
+    Uses Alembic batch mode (`batch_alter_table`) for SQLite table recreation/rebuild.
+    On SQLite, creates temporary shadow tables with table-level locking.
+    On MySQL (InnoDB), `ALTER TABLE ... ADD COLUMN` operates with online DDL where supported,
+    briefly acquiring exclusive metadata locks at start and completion.
+
+Rollback Limitations:
+    Downgrade drops the hardened columns (password_changed_at, file_hash, is_tentative, provenance,
+    actor_id, target, status, details). Data accumulated in these added columns after migration
+    will be discarded upon downgrade. Does not delete core user or student records.
 """
 from typing import Sequence, Union
 

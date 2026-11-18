@@ -301,3 +301,53 @@ def test_at_10_legacy_token_sunset_and_claim_enforcement(db):
         assert "sunset" in str(exc.value.detail).lower()
     finally:
         app.main.LEGACY_TOKEN_SUNSET_DATE = original_sunset
+
+def test_sec_004_documentation_samples_rejected():
+    """SEC-004: Production secret validator rejects every literal sample value shown in documentation."""
+    import re
+    doc_paths = ["README.md", ".env.example", "docs/deployment.md", "docs/architecture.md"]
+    samples_found = set()
+    
+    for path in doc_paths:
+        if os.path.exists(path):
+            with open(path, "r", encoding="utf-8") as f:
+                content = f.read()
+            for m in re.finditer(r'(?:JWT_SECRET_KEY|SECRET_KEY)\s*=\s*([^\r\n#\s]+)', content):
+                val = m.group(1).strip().strip('"').strip("'")
+                if val and val != "None":
+                    samples_found.add(val)
+    
+    assert len(samples_found) > 0, "Expected to find documented sample keys for SEC-004 verification"
+    
+    for sample in samples_found:
+        with pytest.raises(RuntimeError) as exc_info:
+            validate_jwt_secret(sample, environment="production")
+        # Ensure the secret value itself is never leaked in the exception message (SEC-002, SEC-009)
+        assert sample not in str(exc_info.value)
+        assert "empty" in str(exc_info.value).lower() or "placeholder" in str(exc_info.value).lower() or "compromised" in str(exc_info.value).lower() or "at least 32" in str(exc_info.value).lower()
+
+def test_sec_010_token_revocation_replay_rejected(db):
+    """SEC-010: Logout, password change, and token revocation behaviour rejects replay attempts."""
+    user = create_jwt_test_user(db, "replay_user@classpulse.edu")
+    token = token_for(user)
+
+    # 1. Valid request before revocation succeeds
+    res_valid = client.get("/api/v1/me", headers={"Authorization": f"Bearer {token}"})
+    assert res_valid.status_code == 200
+    assert res_valid.json()["email"] == user.email
+
+    # 2. Extract jti and revoke the token
+    payload = decode_token(token, db=db)
+    jti = payload["jti"]
+    db.add(RevokedToken(jti=jti, revoked_at=datetime.now(timezone.utc), expires_at=datetime.now(timezone.utc) + timedelta(hours=1)))
+    db.commit()
+
+    # 3. Replay attempt using revoked token MUST be rejected with 401
+    res_replay = client.get("/api/v1/me", headers={"Authorization": f"Bearer {token}"})
+    assert res_replay.status_code == 401
+    assert "revoked" in res_replay.json()["detail"].lower()
+
+    # 4. Replay against other protected routes also rejected
+    res_replay_students = client.get("/api/v1/students", headers={"Authorization": f"Bearer {token}"})
+    assert res_replay_students.status_code == 401
+

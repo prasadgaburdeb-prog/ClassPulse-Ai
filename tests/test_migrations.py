@@ -129,3 +129,72 @@ def test_at_07_downgrade_and_reversibility(tmp_path):
     assert "revoked_tokens" in tables2
     assert "import_previews" in tables2
     engine2.dispose()
+
+def test_db_005_migration_documentation_consistency():
+    """DB-005: Each migration documents purpose, expected data impact, locking considerations and rollback limitations."""
+    versions_dir = BASE_DIR / "alembic" / "versions"
+    migration_files = list(versions_dir.glob("*.py"))
+    assert len(migration_files) >= 2, "Expected migration version files"
+
+    required_sections = [
+        "Purpose:",
+        "Expected Data Impact:",
+        "Locking Considerations:",
+        "Rollback Limitations:"
+    ]
+
+    for mig_file in migration_files:
+        content = mig_file.read_text(encoding="utf-8")
+        for sec in required_sections:
+            assert sec in content, f"Migration {mig_file.name} missing required documentation section: '{sec}' (DB-005)"
+
+def test_db_010_backup_and_restore_drill(tmp_path):
+    """DB-010: Backup and restore drill demonstrates database can be restored and core records remain readable."""
+    live_db = BASE_DIR / "classpulse.db"
+    assert live_db.exists(), "classpulse.db required for backup and restore drill"
+
+    # Step 1: Copy live database to temporary testing sandbox
+    sandbox_db = tmp_path / "sandbox_live.db"
+    shutil.copyfile(live_db, sandbox_db)
+
+    # Step 2: Record baseline counts from sandbox database
+    engine_orig = sa.create_engine(f"sqlite:///{sandbox_db.as_posix()}")
+    baseline_counts = {}
+    with Session(engine_orig) as session:
+        for tbl in ["tenants", "users", "students", "records", "prediction_history"]:
+            cnt = session.scalar(sa.text(f"SELECT count(*) FROM {tbl}"))
+            baseline_counts[tbl] = cnt
+    engine_orig.dispose()
+
+    assert baseline_counts["tenants"] > 0
+    assert baseline_counts["users"] > 0
+    assert baseline_counts["records"] > 0
+
+    # Step 3: Execute backup procedure (snapshot)
+    backup_file = tmp_path / "drill_backup_snapshot.db"
+    shutil.copyfile(sandbox_db, backup_file)
+    assert backup_file.exists() and backup_file.stat().st_size > 0
+
+    # Step 4: Simulate restoration into a completely separate restored environment
+    restored_db = tmp_path / "restored_production.db"
+    shutil.copyfile(backup_file, restored_db)
+
+    # Step 5: Verify restored database health and readability
+    engine_restored = sa.create_engine(f"sqlite:///{restored_db.as_posix()}")
+    with Session(engine_restored) as session:
+        # SQLite integrity check
+        integrity = session.scalar(sa.text("PRAGMA integrity_check"))
+        assert integrity == "ok"
+
+        # Verify all table record counts match pre-backup state
+        for tbl, expected_count in baseline_counts.items():
+            actual_count = session.scalar(sa.text(f"SELECT count(*) FROM {tbl}"))
+            assert actual_count == expected_count, f"Record count mismatch in {tbl}: expected {expected_count}, got {actual_count}"
+
+        # Verify readability of users and tenant relationship
+        users = session.execute(sa.text("SELECT id, email, tenant_id, role, is_active FROM users LIMIT 5")).fetchall()
+        assert len(users) > 0
+        for u in users:
+            assert u.email and u.tenant_id > 0
+    engine_restored.dispose()
+
