@@ -9,6 +9,7 @@ import math
 import os
 import secrets
 import shutil
+import warnings
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -328,7 +329,9 @@ def decode_token(token: str, db: Optional[Session] = None) -> dict:
     # 1. Reject tokens signed with known compromised secrets
     for comp_key in COMPROMISED_KEYS:
         try:
-            jwt.decode(token, comp_key, algorithms=["HS256", "HS384", "HS512"], options={"verify_signature": True})
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", category=jwt.InsecureKeyLengthWarning)
+                jwt.decode(token, comp_key, algorithms=["HS256", "HS384", "HS512"], options={"verify_signature": True})
             raise HTTPException(401, "Token was signed with a compromised signing key. Re-authentication required (SEC-JWT-01, FR-JWT-05).")
         except HTTPException:
             raise
@@ -1331,7 +1334,7 @@ def get_model_evaluation_info(user: User = Depends(current_user)):
     Returns full machine learning model evaluation metrics, held-out validation results, and provenance (ML-001 to ML-014).
     """
     return {
-        "model_name": "Random Forest Classifier (Benchmark Model)",
+        "model_name": getattr(predictor, "model_name", "Random Forest Classifier (Synthetic Benchmark)"),
         "model_version": predictor.model_version,
         "dataset_provenance": predictor.dataset_provenance,
         "data_type": "synthetic" if predictor.is_synthetic else "real",
@@ -1585,7 +1588,7 @@ def export_predictions(
     output = io.StringIO()
     writer = csv.writer(output)
     writer.writerow(["ClassPulse AI - Student Exam Pass Predictions Report"])
-    writer.writerow(["Model Name", results["summary"].get("model_name", "Random Forest Classifier")])
+    writer.writerow(["Model Name", results["summary"].get("model_name", getattr(predictor, "model_name", "Random Forest Classifier (Synthetic Benchmark)"))])
     writer.writerow(["Model Version", results["summary"].get("model_version", "v2.1.0-benchmark")])
     writer.writerow(["Dataset Provenance", results["summary"].get("dataset_provenance", "synthetic_benchmark")])
     writer.writerow(["Model Held-out Accuracy", f"{results['summary'].get('model_accuracy', 0)}%"])

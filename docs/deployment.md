@@ -118,10 +118,36 @@ alembic upgrade head
 
 ---
 
-## 5. Deployment Checklists (FR-DEP-03)
+## 5. Deployment & Disaster Recovery Checklists (FR-DEP-03, FR-DB-01 to FR-DB-06)
+
+### Pre-Deployment Backup Procedure
+Before initiating schema upgrades or code deployment, execute an authoritative database snapshot:
+
+**For SQLite Deployments:**
+```bash
+# 1. Quiesce or ensure no concurrent writes
+# 2. Create atomic file snapshot
+cp classpulse.db backups/classpulse_pre_deploy_$(date +%Y%m%d_%H%M%S).db
+
+# 3. Verify backup checksum and integrity
+sqlite3 backups/classpulse_pre_deploy_*.db "PRAGMA integrity_check;"
+```
+
+**For MySQL Deployments:**
+```bash
+# Export transactional consistent dump with GTID and routines
+mysqldump --single-transaction --quick --routines --triggers \
+  -u "$DB_USER" -p"$DB_PASS" -h "$DB_HOST" "$DB_NAME" > backups/classpulse_pre_deploy_$(date +%Y%m%d_%H%M%S).sql
+```
+
+**Operational Verification Drill:**
+Validate recoverability in a disposable environment anytime:
+```bash
+python scripts/verify_backup_restore.py
+```
 
 ### Pre-Deployment Checklist
-- [ ] Database backup executed and verified (e.g. `pg_dump` / `mysqldump` / SQLite copy).
+- [ ] Database backup executed and verified with `PRAGMA integrity_check` / checksum.
 - [ ] Fresh independent `JWT_SECRET_KEY` generated via `secrets.token_urlsafe(64)` and populated into secret store.
 - [ ] Verified `JWT_SECRET_KEY` is not a placeholder, weak string, or previously exposed key.
 - [ ] `APP_ENV=production` set in environment.
@@ -149,16 +175,23 @@ alembic upgrade head
 - [ ] Verify spreadsheet upload: staging preview, column mapping, and import idempotency.
 - [ ] Verify prediction generation and PDF report card downloads.
 
-### Rollback Checklist (In Case of Deployment Failure)
+### Rollback & Restore Procedure (In Case of Deployment Failure)
 - [ ] Revert application code / container image to previous release commit.
 - [ ] If schema downgrade is necessary, inspect `alembic/versions/` and execute target downgrade:
   ```bash
   alembic downgrade <PREVIOUS_REVISION_ID>
   ```
 - [ ] If database downgrade leaves mixed state, restore from pre-deployment backup:
+  **For SQLite:**
   ```bash
-  # Restore backup copy taken in pre-deployment step
+  cp backups/classpulse_pre_deploy_<TIMESTAMP>.db classpulse.db
+  python -c "import sqlite3; con = sqlite3.connect('classpulse.db'); print(con.execute('PRAGMA integrity_check').fetchone())"
   ```
+  **For MySQL:**
+  ```bash
+  mysql -u "$DB_USER" -p"$DB_PASS" -h "$DB_HOST" "$DB_NAME" < backups/classpulse_pre_deploy_<TIMESTAMP>.sql
+  ```
+- [ ] Verify restored schema revision via `alembic current`.
 - [ ] Restart application workers under previous release.
 - [ ] Verify login and core services are fully functional.
 

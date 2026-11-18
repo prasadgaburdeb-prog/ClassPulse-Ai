@@ -7,7 +7,7 @@ ClassPulse AI is an enterprise coaching-centre intelligence platform with an int
 ## Key Capabilities (v2.1.0 Improvements)
 
 1. **AI Exam Success Predictor (Pure Academic Model — ML-027 to ML-031)**
-   - Utilizes a single **Random Forest Classifier** (150 estimators, balanced class weights) trained on competitive examination synthetic benchmarks (JEE, NEET, Foundation, Boards). It is implemented as a single standalone Random Forest model, without secondary stacking or calibration layers (FR-ML-01).
+   - Utilizes a single **Random Forest Classifier (Synthetic Benchmark)** (150 estimators, balanced class weights) trained on competitive examination synthetic benchmarks (JEE, NEET, Foundation, Boards). It is implemented as a single standalone Random Forest model, without secondary stacking or calibration layers (FR-ML-01).
    - Generates exact continuous **Pass Probabilities (0–100%)** and classifies risk into three tiers:
      - **Safe / Likely to Pass** (&ge; 75% probability)
      - **Borderline / Moderate Risk** (50% – 74.9% probability)
@@ -73,7 +73,27 @@ Run the comprehensive test suite covering baseline functionality, machine learni
 pytest -v
 ```
 
-All 53 tests pass with 100% verification across all SRS v2.0, v3.0, and v4.0 criteria. Automated Continuous Integration runs across Python 3.11, 3.12, and 3.13 via GitHub Actions.
+All 56 tests pass with 100% verification across all SRS v2.0, v3.0, v4.0, and v5.0 criteria. Automated Continuous Integration runs across Python 3.11, 3.12, and 3.13 via GitHub Actions.
+
+---
+
+## Verification & SRS Compliance Status (SRS v5.0)
+
+In accordance with SRS v5.0 (FR-DOC-01 to FR-DOC-05), all platform capabilities, security assurances, and operational procedures are tracked using standard status vocabulary:
+- **Implemented:** Code or configuration exists in the codebase.
+- **Automated-tested:** Relevant automated tests pass in the continuous integration environment.
+- **Operationally verified:** A real operational procedure was executed and evidenced.
+- **Blocked:** An external prerequisite (e.g. authorized real-world institutional data) is pending.
+- **Not verified:** Evidence is insufficient; completion is not claimed.
+
+| Requirement Group | Status | Evidence Location | Date | Scope & Limitations |
+| :--- | :--- | :--- | :--- | :--- |
+| **FR-ML-01 to FR-ML-04 (ML Naming & Transparency)** | Automated-tested | `tests/test_ml_transparency.py`, `app/ml_model.py` | 2026-11-18 | Canonical model name enforced; synthetic benchmark metrics explicitly tagged. |
+| **FR-SEC-01 to FR-SEC-06 (Full Git History Secret Scan)**| Operationally verified | `docs/secret_review_report.md`, `tests/test_secret_scanning.py` | 2026-11-18 | Full 30-commit reachable history scanned; zero active secrets leaked; historical key blocklisted. |
+| **FR-DB-01 to FR-DB-06 (Backup & Restore Verification)** | Operationally verified | `docs/backup_restore_drill_report.md`, `scripts/verify_backup_restore.py` | 2026-11-18 | Drill verified on disposable SQLite database; Alembic schema, row counts, and reads 100% verified. |
+| **FR-CI-01 to FR-CI-06 (CI Warning Investigation)** | Automated-tested | `docs/ci_warning_inventory.md`, CI run | 2026-11-18 | 92 project-induced warnings eliminated; 1 upstream Starlette deprecation documented. |
+| **FR-DOC-01 to FR-DOC-05 (Documentation Accuracy)** | Implemented | `README.md`, `docs/deployment.md`, `docs/ml_methodology.md` | 2026-11-18 | Claims aligned with evidence; status vocabulary strictly applied. |
+| **ML-006 to ML-008 (Real-World Institutional Data Validation)**| **Blocked** | `docs/ml_methodology.md` (Section 7) | 2026-11-18 | Blocked pending authorized multi-year institutional student dataset licensing. |
 
 ---
 
