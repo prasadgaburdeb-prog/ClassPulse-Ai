@@ -50,3 +50,8 @@ jobs:
           echo '```text' >> $GITHUB_STEP_SUMMARY
           cat pytest_output.txt | tail -n 80 >> $GITHUB_STEP_SUMMARY || true
           echo '```' >> $GITHUB_STEP_SUMMARY
+          python -c "
+          lines = open('pytest_output.txt', errors='ignore').readlines()
+          for line in [l.strip() for l in lines if any(k in l for k in ['FAILED ', 'ERROR ', 'Error: ', 'AssertionError'])][:15]:
+              print(f'::error title=Pytest Failure::{line}')
+          " || true
