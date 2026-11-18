@@ -60,7 +60,7 @@ def test_at_05_fresh_database_migration(tmp_path):
 def _prepare_baseline_v1_database(target_path: Path) -> str:
     """Prepare a baseline v1 schema database from disk backup or synthesize it on clean checkouts."""
     backup_file = BASE_DIR / "classpulse.db.v3_backup"
-    if backup_file.exists():
+    if backup_file.exists() and backup_file.stat().st_size > 10000:
         shutil.copyfile(backup_file, target_path)
     else:
         # Create baseline v1 schema on clean systems where *.db is gitignored
@@ -70,10 +70,11 @@ def _prepare_baseline_v1_database(target_path: Path) -> str:
         engine = sa.create_engine(db_url)
         with Session(engine) as s:
             for t_id in range(1, 6):
-                s.execute(sa.text("INSERT INTO tenants (id, name) VALUES (:id, :name)"),
+                s.execute(sa.text("INSERT INTO tenants (id, name, created_at) VALUES (:id, :name, '2026-01-01 00:00:00')"),
                           {"id": t_id, "name": f"Tenant {t_id}"})
-                s.execute(sa.text("INSERT INTO users (id, tenant_id, email, password_hash, role) VALUES (:id, :tid, :email, :pwd, :role)"),
+                s.execute(sa.text("INSERT INTO users (id, tenant_id, email, password_hash, role, created_at) VALUES (:id, :tid, :email, :pwd, :role, '2026-01-01 00:00:00')"),
                           {"id": t_id, "tid": t_id, "email": f"user{t_id}@classpulse.edu", "pwd": "hash", "role": "admin"})
+            s.execute(sa.text("INSERT INTO import_jobs (id, tenant_id, filename, status, created_at) VALUES (1, 1, 'test.csv', 'completed', '2026-01-01 00:00:00')"))
             for r_id in range(1, 405):
                 s.execute(sa.text("INSERT INTO records (tenant_id, import_id, record_type, data_json) VALUES (1, 1, 'attendance', '{\"status\": \"present\"}')"))
             s.commit()
@@ -167,23 +168,21 @@ def test_db_005_migration_documentation_consistency():
 
 def test_db_010_backup_and_restore_drill(tmp_path):
     """DB-010: Backup and restore drill demonstrates database can be restored and core records remain readable."""
-    live_db = BASE_DIR / "classpulse.db"
     sandbox_db = tmp_path / "sandbox_live.db"
-    if live_db.exists() and live_db.stat().st_size > 0:
-        shutil.copyfile(live_db, sandbox_db)
-    else:
-        # Create and populate sandbox database on fresh checkout
-        db_url = f"sqlite:///{sandbox_db.as_posix()}"
-        cfg = run_alembic_command(["upgrade", "head"], db_url)
-        command.upgrade(cfg, "head")
-        engine_setup = sa.create_engine(db_url)
-        with Session(engine_setup) as s:
-            s.execute(sa.text("INSERT INTO tenants (id, name, created_at) VALUES (1, 'Drill Centre', '2026-01-01 00:00:00')"))
-            s.execute(sa.text("INSERT INTO users (id, tenant_id, email, password_hash, role, is_active) VALUES (1, 1, 'admin@drill.edu', 'hash', 'admin', 1)"))
-            s.execute(sa.text("INSERT INTO students (id, tenant_id, student_id, name, course_id, batch_id) VALUES (1, 1, 'STU-01', 'Drill Student', 'JEE', 'BatchA')"))
-            s.execute(sa.text("INSERT INTO records (id, tenant_id, import_id, record_type, data_json) VALUES (1, 1, 1, 'attendance', '{\"status\":\"present\"}')"))
-            s.commit()
-        engine_setup.dispose()
+    db_url = f"sqlite:///{sandbox_db.as_posix()}"
+    cfg = run_alembic_command(["upgrade", "head"], db_url)
+    command.upgrade(cfg, "head")
+
+    engine_setup = sa.create_engine(db_url)
+    with Session(engine_setup) as s:
+        s.execute(sa.text("INSERT INTO tenants (id, name, created_at) VALUES (1, 'Drill Centre', '2026-01-01 00:00:00')"))
+        s.execute(sa.text("INSERT INTO users (id, tenant_id, email, password_hash, role, is_active, created_at) VALUES (1, 1, 'admin@drill.edu', 'hash', 'admin', 1, '2026-01-01 00:00:00')"))
+        s.execute(sa.text("INSERT INTO students (id, tenant_id, student_id, name, course_id, batch_id, created_at, updated_at) VALUES (1, 1, 'STU-01', 'Drill Student', 'JEE', 'BatchA', '2026-01-01 00:00:00', '2026-01-01 00:00:00')"))
+        s.execute(sa.text("INSERT INTO import_jobs (id, tenant_id, filename, status, created_at) VALUES (1, 1, 'drill.csv', 'completed', '2026-01-01 00:00:00')"))
+        s.execute(sa.text("INSERT INTO records (id, tenant_id, import_id, record_type, data_json) VALUES (1, 1, 1, 'attendance', '{\"status\":\"present\"}')"))
+        s.execute(sa.text("INSERT INTO prediction_history (id, tenant_id, student_id, pass_probability, risk_level, predicted_outcome, attendance_rate, model_version, is_tentative, provenance, created_at) VALUES (1, 1, 'STU-01', 85.0, 'Safe', 'Likely Pass', 90.0, 'v2.1.0', 0, 'benchmark', '2026-01-01 00:00:00')"))
+        s.commit()
+    engine_setup.dispose()
 
     # Step 2: Record baseline counts from sandbox database
     engine_orig = sa.create_engine(f"sqlite:///{sandbox_db.as_posix()}")
