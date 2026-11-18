@@ -35,8 +35,18 @@ jobs:
           alembic upgrade head
 
       - name: Run Test Suite
+        id: run_tests
         env:
           JWT_SECRET_KEY: "ci-testing-jwt-secret-key-minimum-32-characters-for-sha256-compliance"
           ENVIRONMENT: "testing"
         run: |
-          pytest -v
+          pytest -v --tb=short 2>&1 | tee pytest_output.txt
+          exit ${PIPESTATUS[0]}
+
+      - name: Publish Test Output to Summary
+        if: always()
+        run: |
+          echo "## Pytest Output (Python ${{ matrix.python-version }})" >> $GITHUB_STEP_SUMMARY
+          echo '```text' >> $GITHUB_STEP_SUMMARY
+          cat pytest_output.txt | tail -n 80 >> $GITHUB_STEP_SUMMARY || true
+          echo '```' >> $GITHUB_STEP_SUMMARY
