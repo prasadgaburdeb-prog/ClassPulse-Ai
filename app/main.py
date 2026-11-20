@@ -696,14 +696,14 @@ def validate_filters(start: str|None, end: str|None):
         raise HTTPException(400, "Start date must be before or equal to end date.")
 
 def metrics(rows: list[dict]):
-    enquiries = [r for r in rows if r["record_type"] == "enquiry"]
-    admissions = [r for r in rows if r["record_type"] == "student"]
-    obligations = sum((Decimal(r["amount"]) for r in rows if r["record_type"] == "obligation"), Decimal())
-    payments = sum((Decimal(r["amount"]) - Decimal(r.get("refund_amount") or 0) for r in rows if r["record_type"] == "payment" and r["status"].lower() == "successful"), Decimal())
-    attendance = [r for r in rows if r["record_type"] == "attendance" and r["status"].lower() != "excused"]
-    present = sum(r["status"].lower() == "present" for r in attendance)
-    exams = [r for r in rows if r["record_type"] in ("exam", "test")]
-    avg_mock_score = round(float(sum(Decimal(r["amount"]) for r in exams) / len(exams)), 1) if exams else None
+    enquiries = [r for r in rows if r.get("record_type") == "enquiry"]
+    admissions = [r for r in rows if r.get("record_type") == "student"]
+    obligations = sum((Decimal(str(r.get("amount") or 0)) for r in rows if r.get("record_type") == "obligation"), Decimal())
+    payments = sum((Decimal(str(r.get("amount") or 0)) - Decimal(str(r.get("refund_amount") or 0)) for r in rows if r.get("record_type") == "payment" and (r.get("status") or "").lower() == "successful"), Decimal())
+    attendance = [r for r in rows if r.get("record_type") == "attendance" and (r.get("status") or "").lower() != "excused"]
+    present = sum((r.get("status") or "").lower() == "present" for r in attendance)
+    exams = [r for r in rows if r.get("record_type") in ("exam", "test")]
+    avg_mock_score = round(float(sum(Decimal(str(r.get("amount") or r.get("score") or 0)) for r in exams) / len(exams)), 1) if exams else None
 
     return {
         "enquiries": len(enquiries),
