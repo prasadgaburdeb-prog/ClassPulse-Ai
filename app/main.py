@@ -1214,6 +1214,12 @@ def get_student_profile(student_id: str, user: User = Depends(current_user), db:
         "student_id": student_id,
         "course_id": profile["course_id"],
         "batch_id": profile["batch_id"],
+        "student": {
+            "student_id": student_id,
+            "name": profile.get("student_name") or student_id,
+            "course_id": profile["course_id"],
+            "batch_id": profile["batch_id"]
+        },
         "academic_metrics": {
             "attendance_rate": profile["attendance_rate"],
             "classes_attended": profile["present_count"],
@@ -1223,8 +1229,17 @@ def get_student_profile(student_id: str, user: User = Depends(current_user), db:
             "attendance_trend": profile.get("attendance_trend", 0.0),
             "course_difficulty": profile.get("course_difficulty", 1.0)
         },
+        "attendance_summary": {
+            "attendance_rate": profile["attendance_rate"],
+            "present_count": profile["present_count"],
+            "total_sessions": profile["total_sessions"],
+            "attendance_trend": profile.get("attendance_trend", 0.0)
+        },
+        "avg_mock_score": profile["avg_mock_score"],
+        "mock_exams": exam_logs[:20],
         "financial_standing": current_pred.get("financial_risk", {}),
         "current_prediction": current_pred,
+        "latest_prediction": current_pred,
         "attendance_logs": attendance_logs[:20],
         "exam_logs": exam_logs[:20],
         "prediction_history": prediction_history

@@ -268,3 +268,44 @@ def test_fr_ml_03_api_and_export_canonical_model_naming():
     assert "academic calibration" not in csv_text.lower()
 
 
+def test_fr_ml_04_frontend_canonical_naming_and_decision_support():
+    """FR-ML-01, FR-ML-03, ML-009: Frontend reflects canonical name and decision-support guidance."""
+    js_path = "static/app.js"
+    assert os.path.exists(js_path)
+    with open(js_path, "r", encoding="utf-8") as f:
+        js_content = f.read()
+
+    canonical_name = "Random Forest Classifier (Synthetic Benchmark)"
+    assert canonical_name in js_content, "Frontend static/app.js must display the canonical model name"
+    assert "Random Forest Classifier - Synthetic Benchmark" not in js_content, "Stale hyphenated model name must be removed"
+    assert "decision-support" in js_content.lower(), "Frontend must present predictions as decision-support indicators"
+    assert "Tentative (Missing Mocks)" in js_content or "Incomplete Data / Tentative" in js_content
+
+
+def test_fr_ml_05_no_data_leakage_in_training_pipeline():
+    """ML-001, ML-027, DATA-018: Verify no data leakage in dataset generation or preprocessing."""
+    from app.ml_model import generate_benchmark_dataset
+    import numpy as np
+
+    X, y = generate_benchmark_dataset(n_samples=500, random_seed=99)
+    assert X.shape == (500, 5)
+    assert y.shape == (500,)
+
+    # Verify target variable binary values {0, 1}
+    unique_y = np.unique(y)
+    assert set(unique_y).issubset({0, 1})
+
+    # Verify no column in X equals y or linear exact match to y
+    for col_idx in range(X.shape[1]):
+        col = X[:, col_idx]
+        assert not np.array_equal(col, y), f"Feature column {col_idx} leaks target label!"
+        # Check Pearson correlation is not artificially 1.0 (leakage)
+        corr = np.corrcoef(col, y)[0, 1]
+        assert abs(corr) < 0.90, f"Feature column {col_idx} shows excessive correlation ({corr}) with target!"
+
+    # Verify financial columns are not present in predictor feature names
+    for fname in predictor.feature_names:
+        assert not any(fin_kw in fname.lower() for fin_kw in ["fee", "due", "paid", "financial", "obligation", "balance"])
+
+
+
