@@ -77,15 +77,16 @@ def test_sec_013_repository_secret_scanning():
                     "match": match.group(0)[:20] + "..."
                 })
 
-        # Ensure compromised key appears ONLY in blocklist/test verification, NEVER as active secret
+        # Ensure compromised key appears ONLY in blocklist/test verification, NEVER in docs/readme or as active secret
         if COMPROMISED_KEY in content:
-            # Permitted only in COMPROMISED_KEYS blocklist, negative tests, and doc warnings
+            assert "docs" not in file_path.lower() and "readme" not in file_path.lower(), (
+                f"Compromised key must be redacted in documentation and reports: found in {file_path}"
+            )
+            # Permitted only in COMPROMISED_KEYS blocklist and negative tests
             is_permitted_blocklist = (
                 "COMPROMISED_KEYS" in content
                 or "compromised" in file_path.lower()
                 or "test" in file_path.lower()
-                or "docs" in file_path.lower()
-                or "readme" in file_path.lower()
             )
             assert is_permitted_blocklist, f"Compromised key found outside blocklist/tests in {file_path}"
             # Verify it is not being assigned as RAW_SECRET

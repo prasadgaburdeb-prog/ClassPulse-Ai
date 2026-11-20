@@ -46,7 +46,7 @@ A comprehensive, history-aware cryptographic and credential scan was executed ac
 
 - **Live Production Secrets:** None exposed. No cloud provider API keys, AWS credentials, or live database connection strings have ever been committed.
 - **Historical Fallback Key:**
-  - **Key Identifier:** `classpulse-super-secure-production-jwt-key-2026-deb-prasad`
+  - **Key Identifier:** `classpulse-super-secure-...` [REDACTED HISTORICAL VALUE - SHA256: `7225787838212be4e8b26616c328b75e8d8017cf383c688afa4af2a14245b622`]
   - **Issuing Service:** Internal application JWT signing engine.
   - **Current Status:** Permanently blocklisted in `COMPROMISED_KEYS` (`app/main.py:61`).
   - **Enforcement:** `decode_token()` actively verifies signatures against this string and raises `HTTP 401 Unauthorized` with message `"Token was signed with a compromised signing key."`
