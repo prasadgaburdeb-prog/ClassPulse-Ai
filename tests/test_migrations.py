@@ -206,12 +206,16 @@ def test_db_010_backup_and_restore_drill(tmp_path):
     restored_db = tmp_path / "restored_production.db"
     shutil.copyfile(backup_file, restored_db)
 
-    # Step 5: Verify restored database health and readability
+    # Step 5: Verify restored database health, foreign-key integrity, and application API readability
     engine_restored = sa.create_engine(f"sqlite:///{restored_db.as_posix()}")
     with Session(engine_restored) as session:
         # SQLite integrity check
         integrity = session.scalar(sa.text("PRAGMA integrity_check"))
         assert integrity == "ok"
+
+        # Foreign key integrity check (AT-06)
+        fk_violations = session.execute(sa.text("PRAGMA foreign_key_check")).fetchall()
+        assert len(fk_violations) == 0, f"Foreign key check violations detected: {fk_violations}"
 
         # Verify all table record counts match pre-backup state
         for tbl, expected_count in baseline_counts.items():
@@ -223,5 +227,31 @@ def test_db_010_backup_and_restore_drill(tmp_path):
         assert len(users) > 0
         for u in users:
             assert u.email and u.tenant_id > 0
-    engine_restored.dispose()
+
+    # Step 6: Verify actual FastAPI application API read-back against restored database (AT-07, FR-06)
+    from starlette.testclient import TestClient
+    from app.main import app, db_session, token_for
+    from app.models import User
+
+    restored_session_maker = sa.orm.sessionmaker(bind=engine_restored, expire_on_commit=False)
+    def override_restored_db():
+        with restored_session_maker() as s:
+            yield s
+
+    app.dependency_overrides[db_session] = override_restored_db
+    try:
+        client = TestClient(app)
+        with Session(engine_restored) as s:
+            user_inst = s.get(User, 1)
+            token = token_for(user_inst)
+
+        me_resp = client.get("/api/v1/me", headers={"Authorization": f"Bearer {token}"})
+        assert me_resp.status_code == 200
+        assert me_resp.json()["email"] == "admin@drill.edu"
+
+        stu_resp = client.get("/api/v1/students", headers={"Authorization": f"Bearer {token}"})
+        assert stu_resp.status_code == 200
+    finally:
+        app.dependency_overrides.clear()
+        engine_restored.dispose()
 
