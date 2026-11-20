@@ -49,7 +49,7 @@ ClassPulse AI is an enterprise coaching-centre intelligence and machine learning
 - **JWT Signing-Key Remediation (SEC-JWT-01 to SEC-JWT-06):**
   - All hardcoded signing keys and insecure fallbacks have been eliminated.
   - In production (`APP_ENV=production`), the application fails closed on startup if `JWT_SECRET_KEY` is missing, shorter than 32 characters, or matches any known compromised key.
-  - The previously exposed key (`classpulse-super-secure-production-jwt-key-2026-deb-prasad`) is actively blocklisted. Any token presented with this signature is rejected with HTTP 401.
+  - The previously exposed historical key (`classpulse-super-secure-...` [REDACTED HISTORICAL VALUE]) is actively blocklisted. Any token presented with this signature is rejected with HTTP 401.
   - Algorithms are strictly enforced to `HS256`. Unsigned tokens (`alg: none`) and algorithm confusion attacks (e.g., asymmetric confusion or unauthorized symmetric algorithms) are rejected.
   - Every token carries standard claims: `sub`, `uid`, `tid`, `email`, `role`, `iat`, `exp`, `iss`, `aud`, and `jti`.
 - **Token Revocation & Session Management (FR-AUTH-04, FR-AUTH-05, SEC-TOK-05):**
