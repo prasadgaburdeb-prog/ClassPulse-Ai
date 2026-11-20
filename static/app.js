@@ -229,7 +229,7 @@ function dashboard() {
       <div class="panel-header">
         <div>
           <h2>AI Student Exam Pass Predictor</h2>
-          <p class="small">Machine Learning model (Random Forest Classifier - Synthetic Benchmark) analyzing attendance regularity, mock exam scores, and course benchmark rigor to predict student pass probabilities.</p>
+          <p class="small">Machine Learning model (Random Forest Classifier (Synthetic Benchmark)) analyzing attendance regularity, mock exam scores, and course benchmark rigor to generate student pass probabilities as decision-support indicators.</p>
         </div>
         <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
           <a class="button" href="/api/v1/reports/pdf/cohort-summary" target="_blank" style="text-decoration:none; font-size:12px; padding: 7px 14px; background: #0284c7; color: white;">⬇ Cohort PDF Report</a>
@@ -722,9 +722,11 @@ async function openStudentModal(studentId) {
 
   try {
     let d = await api(`/api/v1/students/${studentId}`);
-    let s = d.student;
-    let fin = d.financial_standing;
-    let pred = d.latest_prediction;
+    let s = d.student || { student_id: d.student_id, name: d.student_id, course_id: d.course_id, batch_id: d.batch_id };
+    let fin = d.financial_standing || {};
+    let pred = d.latest_prediction || d.current_prediction || {};
+    let acad = d.academic_metrics || d.attendance_summary || {};
+    let mockExams = d.mock_exams || d.exam_logs || [];
 
     $('#modalStudentName').textContent = s.name || s.student_id;
     $('#modalStudentId').textContent = `ID: ${s.student_id} · Course: ${s.course_id} · Batch: ${s.batch_id}`;
@@ -733,10 +735,10 @@ async function openStudentModal(studentId) {
     let riskColor = pred.risk_level === 'High Risk' ? 'var(--danger)' : pred.risk_level === 'Borderline' ? 'var(--warning)' : 'var(--safe)';
     let riskBadge = pred.risk_level === 'High Risk' ? 'badge-danger' : pred.risk_level === 'Borderline' ? 'badge-warning' : 'badge-success';
 
-    let examsListHtml = d.mock_exams.length ? `
+    let examsListHtml = mockExams.length ? `
       <table>
         <tr><th>Exam Date</th><th>Score</th><th>Result</th></tr>
-        ${d.mock_exams.map(e => `<tr><td>${e.date}</td><td><strong>${e.score}</strong> / 100</td><td>${e.score >= 50 ? '<span class="badge badge-success">Passed</span>' : '<span class="badge badge-danger">Failed</span>'}</td></tr>`).join('')}
+        ${mockExams.map(e => `<tr><td>${e.date}</td><td><strong>${e.score ?? e.amount ?? '--'}</strong> / 100</td><td>${(e.score ?? e.amount ?? 0) >= 50 ? '<span class="badge badge-success">Passed</span>' : '<span class="badge badge-danger">Failed</span>'}</td></tr>`).join('')}
       </table>
     ` : '<p class="small" style="color:var(--muted);">No mock exams recorded yet.</p>';
 
@@ -757,23 +759,25 @@ async function openStudentModal(studentId) {
       </div>
     ` : '<p class="small" style="color:var(--muted);">Initial prediction recorded.</p>';
 
+    let isTentative = pred.is_tentative || pred.is_incomplete || !mockExams.length;
+
     body.innerHTML = `
       <!-- Top Academic & Financial Metric Cards -->
       <div class="profile-grid">
         <div class="profile-card">
           <div class="lbl">Attendance Rate</div>
-          <div class="val" style="color:${d.attendance_summary.attendance_rate >= 75 ? 'var(--safe)' : 'var(--danger)'}">${d.attendance_summary.attendance_rate}%</div>
-          <div class="small">${d.attendance_summary.present_count} / ${d.attendance_summary.total_sessions} sessions</div>
+          <div class="val" style="color:${(acad.attendance_rate || 0) >= 75 ? 'var(--safe)' : 'var(--danger)'}">${acad.attendance_rate ?? 0}%</div>
+          <div class="small">${acad.present_count ?? acad.classes_attended ?? 0} / ${acad.total_sessions ?? acad.total_classes ?? 0} sessions</div>
         </div>
         <div class="profile-card">
           <div class="lbl">Mock Exam Avg</div>
-          <div class="val">${d.avg_mock_score != null ? `${d.avg_mock_score}/100` : 'Pending'}</div>
-          <div class="small">${d.mock_exams.length} exams recorded</div>
+          <div class="val">${(d.avg_mock_score ?? acad.avg_mock_score) != null ? `${d.avg_mock_score ?? acad.avg_mock_score}/100` : 'Pending'}</div>
+          <div class="small">${mockExams.length} exams recorded</div>
         </div>
         <div class="profile-card">
           <div class="lbl">Fee Clearance (Independent)</div>
-          <div class="val">${fin.clearance_pct}%</div>
-          <div class="small">${fin.outstanding_fees > 0 ? `Due: ${money(fin.outstanding_fees)}` : 'Cleared'}</div>
+          <div class="val">${fin.clearance_pct ?? 0}%</div>
+          <div class="small">${(fin.outstanding_fees || 0) > 0 ? `Due: ${money(fin.outstanding_fees)}` : 'Cleared'}</div>
         </div>
         <div class="profile-card">
           <div class="lbl">AI Pass Probability</div>
@@ -784,16 +788,19 @@ async function openStudentModal(studentId) {
 
       <!-- Section: Machine Learning Assessment & Transparent Factors -->
       <div style="background:#f8fafc; border:1px solid var(--line); border-radius:8px; padding:14px 18px;">
-        <div style="font-weight:700; color:var(--ink); font-size:14px; margin-bottom:6px;">🤖 AI Exam Performance Projection</div>
-        <p class="small" style="margin:0 0 10px; color:var(--muted);">Evaluated strictly against academic indicators (Mock Exam Scores, Attendance Regularity & Course Rigor). Financial standing is kept fully independent.</p>
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+          <div style="font-weight:700; color:var(--ink); font-size:14px;">🤖 AI Exam Performance Projection</div>
+          ${isTentative ? '<span class="badge" style="background:#fef3c7; color:#92400e; font-weight:700;">⚠️ Incomplete Data / Tentative</span>' : ''}
+        </div>
+        <p class="small" style="margin:0 0 10px; color:var(--muted);">Evaluated strictly against academic indicators (Mock Exam Scores, Attendance Regularity & Course Rigor) using the Random Forest Classifier (Synthetic Benchmark). Financial standing is kept fully independent.</p>
         
         <div style="margin-bottom:10px;">
           <div class="label" style="margin-bottom:4px;">Contributing Factors & Guidance:</div>
           <ul style="margin:0; padding-left:20px; font-size:13px; line-height:1.6;">
-            ${(pred.factors || []).map(f => `<li>${f}</li>`).join('')}
+            ${(pred.factors || pred.key_factors || []).map(f => `<li>${f}</li>`).join('')}
           </ul>
         </div>
-        <p class="small" style="color:#64748b; font-style:italic; margin:8px 0 0;">Notice: Predictions are statistical estimates for pedagogical support and do not guarantee final examination results.</p>
+        <p class="small" style="color:#64748b; font-style:italic; margin:8px 0 0;">Notice: Predictions are statistical decision-support indicators for educational guidance and do NOT constitute guaranteed exam outcomes.</p>
       </div>
 
       <!-- Section: Mock Exams History -->
@@ -910,7 +917,10 @@ function renderPredictionsList(preds, s) {
             <div class="prob-val" style="color: ${color};">${p.pass_probability}%</div>
           </div>
         </td>
-        <td><span class="badge ${badgeClass}">${p.risk_level}</span></td>
+        <td>
+          <span class="badge ${badgeClass}">${p.risk_level}</span>
+          ${(p.is_tentative || p.is_incomplete || !p.has_mock_records) ? '<div class="small" style="color:#b45309; font-weight:600; margin-top:2px;" title="Missing mock exam scores; prediction is tentative">⚠️ Tentative (Missing Mocks)</div>' : ''}
+        </td>
         <td>
           <button class="button small" style="padding:4px 8px; font-size:11px;" onclick="openStudentModal('${p.student_id}')">👁 View 360°</button>
         </td>
